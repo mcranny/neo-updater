@@ -12,7 +12,7 @@ Runs locally and automatically 4×/day via GitHub Actions.
 ---
 
 ## Roadmap
-- Add calculations for **orbit trajectories** to the NEO records
+- Add calculations for orbit trajectories to the NEO records
 - Develop Web App for easy access
 - Email Updates
 ```
