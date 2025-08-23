@@ -1,0 +1,40 @@
+name: Hazardous NEOs 4x Daily
+on:
+  schedule:
+    - cron: "0 0,6,12,18 * * *"   # 00:00, 06:00, 12:00, 18:00 UTC
+  workflow_dispatch:
+
+concurrency:
+  group: neos-update
+  cancel-in-progress: true
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run updater
+        shell: bash --noprofile --norc -euo pipefail {0}
+        env:
+          NASA_API_KEY: ${{ secrets.NASA_API_KEY }}
+          OUT_FILE: data/hazardous_neos/latest.json
+        run: |
+          python3 scripts/update_hazardous_neos.py
+
+      - name: Commit & push if changed
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          if git status --porcelain | grep .; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add -A
+            git commit -m "Update hazardous NEO snapshot: $(date -u +%F)"
+            git push
+          else
+            echo "No changes to commit."
+          fi
