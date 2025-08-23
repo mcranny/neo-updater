@@ -1,0 +1,10 @@
+# Python cache
+__pycache__/
+*.pyc
+
+# Local environment files
+.env
+.env.local
+
+# macOS metadata
+.DS_Store

@@ -1,0 +1,33 @@
+{
+  "date_utc": "2025-08-20",
+  "snapshot_utc": "2025-08-23T22:08:09Z",
+  "count": 2,
+  "potentially_hazardous_neos": [
+    {
+      "name": "(1997 QK1)",
+      "neo_reference_id": "3010679",
+      "absolute_magnitude_h": 20.26,
+      "estimated_diameter_m_min": 235.8060679997,
+      "estimated_diameter_m_max": 527.2783975542,
+      "close_approach": {
+        "date_full": "2025-Aug-20 10:25",
+        "orbiting_body": "Earth",
+        "miss_distance_km": 3011711.694014991,
+        "relative_velocity_km_s": 9.8322279264
+      }
+    },
+    {
+      "name": "(2024 BR4)",
+      "neo_reference_id": "54423312",
+      "absolute_magnitude_h": 21.4,
+      "estimated_diameter_m_min": 139.4938229344,
+      "estimated_diameter_m_max": 311.9176705226,
+      "close_approach": {
+        "date_full": "2025-Aug-20 11:53",
+        "orbiting_body": "Earth",
+        "miss_distance_km": 36045049.85354956,
+        "relative_velocity_km_s": 10.0237553647
+      }
+    }
+  ]
+}
