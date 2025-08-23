@@ -1,4 +1,5 @@
 name: Hazardous NEOs 4x Daily
+
 on:
   schedule:
     - cron: "0 0,6,12,18 * * *"   # 00:00, 06:00, 12:00, 18:00 UTC
@@ -13,23 +14,27 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
       - name: Run updater
-        shell: bash --noprofile --norc -euo pipefail {0}
         env:
           NASA_API_KEY: ${{ secrets.NASA_API_KEY }}
           OUT_FILE: data/hazardous_neos/latest.json
-        run: |
-          python3 scripts/update_hazardous_neos.py
+        run: python -m scripts.update_hazardous_neos
 
       - name: Commit & push if changed
-        shell: bash --noprofile --norc -euo pipefail {0}
         run: |
-          if git status --porcelain | grep .; then
+          if [[ -n "$(git status --porcelain)" ]]; then
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git add -A
