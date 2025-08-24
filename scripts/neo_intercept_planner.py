@@ -1,405 +1,401 @@
 #!/usr/bin/env python3
 """
 NEO Intercept Planner (JSON → JSON)
-- Reads your NEO snapshot JSON, computes a 500 km LEO → heliocentric Hohmann transfer
-  using a NEO Surveyor–like spacecraft by default, and appends an "intercept_plan"
-  block to each NEO entry. Writes a new JSON with the same shape as input.
 
-Usage examples:
-  python3 -m scripts.neo_intercept_planner
-  python3 -m scripts.neo_intercept_planner data/hazardous_neos/latest.json --output data/hazardous_neos/latest_intercept.json
-  python3 -m scripts.neo_intercept_planner --r2-au 1.30 --output data/hazardous_neos/latest_intercept.json
+Reads a hazardous-NEO snapshot JSON (default: OUT_FILE or data/hazardous_neos/latest.json)
+and writes a separate planning file (default: sibling *_intercept.json).
+
+For each NEO, computes:
+- Circular/coplanar Hohmann transfer from r1=1 AU → r2 (configurable / inferred)
+- Time of flight and v_inf at Earth
+- LEO Δv using v_inf and Oberth-aware escape from circular LEO
+- Simple arrival Δv (heliocentric insertion to target circular speed)
+- Heuristic on-asteroid orbit suggestion (>=3R and >=1 km altitude)
+- Launch/arrival timestamps; roll-forward of past arrivals using synodic period
+
+CLI:
+  python -m scripts.neo_intercept_planner \
+      --input data/hazardous_neos/latest.json \
+      --output data/hazardous_neos/latest_intercept.json \
+      --roll-past \
+      --profile neosurveyor
+
+Notes:
+- If target orbital radius r2 is unavailable, defaults to 1.0 AU (Earth-like).
+- If an arrival timestamp is in the past and --roll-past is set, we add k * P_syn
+  (synodic period between Earth at 1 AU and target at r2) until arrival > now.
+- Uses only circular/coplanar approximations; good for quick sizing, not mission design.
 """
 
-import os
-import json
-import math
-import argparse
-import sys
-from dataclasses import dataclass
-from pathlib import Path
-from typing import List, Dict, Any, Optional, Tuple
+from __future__ import annotations
+import argparse, json, math, os, sys
 from datetime import datetime, timezone, timedelta
+from typing import Any, Dict, Optional, Tuple
 
 # --- Constants (SI) ---
-AU = 1.495978707e11
-MU_SUN = 1.32712440018e20
-MU_EARTH = 3.986004418e14
-R_EARTH = 6378.1363e3
-G = 6.67430e-11
-g0 = 9.80665
+AU = 1.495978707e11           # m
+MU_SUN = 1.32712440018e20     # m^3/s^2
+MU_EARTH = 3.986004418e14     # m^3/s^2
+R_EARTH = 6378137.0           # m
+G0 = 9.80665                  # m/s^2
 
-# --- Craft profile presets ---
-PROFILES = {
-    "neosurveyor": {
-        "m0_kg": 1300.0,
-        "Isp_s": 230.0,
-        "h_leo_km": 500.0,
-        "note": "NEO Surveyor–like mass; Isp assumed hydrazine monoprop (~230 s)."
-    }
-}
+# Default LEO altitude
+DEFAULT_LEO_ALT_M = 500e3     # 500 km
 
-@dataclass
-class MissionInputs:
-    r2_AU: float = 1.0
-    h_leo_km: float = 500.0
-    Isp_s: float = 230.0
-    m0_kg: float = 1300.0
-    density_kg_m3: float = 2200.0
-    rendezvous: bool = True
-    aerocapture: bool = False
-    profile: Optional[str] = "neosurveyor"
-    profile_note: Optional[str] = PROFILES["neosurveyor"]["note"]
+# Heuristic asteroid density (if unknown)
+RHO_ASTEROID = 2000.0         # kg/m^3 (2 g/cc)
 
-@dataclass
-class HohmannResult:
-    dv_helio_dep: float
-    dv_helio_arr: float
-    tof_days: float
-    phase_angle_deg: float
-    v_inf_dep: float
-    dv_leo_escape: float
-    dv_total_to_rendezvous: float
+SCHEMA_VERSION = "1.1.0"
 
-@dataclass
-class AsteroidScenario:
-    diameter_m: float
-    radius_m: float
-    density_kg_m3: float
-    mass_kg: float
-    mu_m3s2: float
-    hill_m: float
-    surface_g_m_s2: float
-    chosen_orbit_radius_m: float
-    altitude_over_surface_m: float
-    v_circ_m_s: float
-    period_hours: float
-    dv_insertion_m_s: float
-    dv_total_including_insert_m_s: float
-    m_final_after_all_burns_kg: float
-    propellant_used_kg: float
+def iso_z(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z")
 
-# --- Orbital math ---
-def hohmann_1AU_to_r2(r2_AU: float) -> Tuple[float, float, float, float, float, float, float]:
-    r1 = AU
-    r2 = r2_AU * AU
-    v1 = math.sqrt(MU_SUN / r1)
-    v2 = math.sqrt(MU_SUN / r2)
-    a_t = 0.5 * (r1 + r2)
-    v_t1 = math.sqrt(MU_SUN * (2/r1 - 1/a_t))
-    v_t2 = math.sqrt(MU_SUN * (2/r2 - 1/a_t))
-    dv_dep = abs(v_t1 - v1)
-    dv_arr = abs(v2 - v_t2)
-    tof = math.pi * math.sqrt(a_t**3 / MU_SUN)
-    if r2 > r1:
-        phi = math.pi * (1 - math.sqrt((2*r2)/(r1 + r2)))
-    else:
-        phi = math.pi * (math.sqrt((2*r1)/(r1 + r2)) - 1)
-    return dv_dep, dv_arr, tof, math.degrees(phi), v1, v2, v_t1
-
-def leo_escape_dv_from_vinf(h_leo_km: float, v_inf: float) -> float:
-    r_leo = R_EARTH + h_leo_km*1e3
-    v_circ = math.sqrt(MU_EARTH / r_leo)
-    v_esc = math.sqrt(2) * v_circ
-    dv = math.sqrt(v_inf**2 + v_esc**2) - v_circ
-    return dv
-
-def mass_after_burn(m0: float, dv: float, Isp: float) -> float:
-    if dv <= 0:
-        return m0
-    return m0 * math.exp(-dv/(g0*Isp))
-
-def asteroid_params(diameter_m: float, density_kg_m3: float, a_AU: float) -> Tuple[float, float, float, float, float]:
-    R = 0.5 * diameter_m
-    volume = (4.0/3.0) * math.pi * R**3
-    mass = density_kg_m3 * volume
-    mu = G * mass
-    a = a_AU * AU
-    r_hill = a * (mu/(3.0*MU_SUN))**(1.0/3.0)
-    g_surface = mu / (R**2) if R > 0 else 0.0
-    return R, mass, mu, r_hill, g_surface
-
-def choose_stable_orbit_radius(R_body: float, r_hill: float) -> float:
-    # Heuristic: >= 3R and >= 1 km; < ~30% Hill
-    r_lower = max(3.0*R_body, 1000.0)
-    r_upper = 0.30 * r_hill
-    if r_upper < r_lower:
-        return r_lower
-    return r_lower
-
-def circular_orbit_stats(mu: float, r_orbit: float) -> Tuple[float, float]:
-    if mu <= 0 or r_orbit <= 0:
-        return 0.0, 0.0
-    v = math.sqrt(mu / r_orbit)
-    T = 2.0*math.pi * math.sqrt(r_orbit**3 / mu)
-    return v, T
-
-def plan_chain(params: MissionInputs) -> HohmannResult:
-    dv_dep_helio, dv_arr_helio, tof, phi_deg, v1, v2, v_t1 = hohmann_1AU_to_r2(params.r2_AU)
-    v_inf_dep = abs(v_t1 - v1)
-    dv_leo = leo_escape_dv_from_vinf(params.h_leo_km, v_inf_dep)
-    dv_arr_final = 0.0 if (params.aerocapture or not params.rendezvous) else dv_arr_helio
-    dv_total = dv_leo + dv_dep_helio + dv_arr_final
-    return HohmannResult(
-        dv_helio_dep=dv_dep_helio,
-        dv_helio_arr=dv_arr_final,
-        tof_days=tof/86400.0,
-        phase_angle_deg=phi_deg,
-        v_inf_dep=v_inf_dep,
-        dv_leo_escape=dv_leo,
-        dv_total_to_rendezvous=dv_total,
-    )
-
-def scenario_for_diameter(d_m: float, params: MissionInputs, chain: HohmannResult) -> AsteroidScenario:
-    R, m_ast, mu_ast, hill, g_s = asteroid_params(d_m, params.density_kg_m3, params.r2_AU)
-    r_orbit = choose_stable_orbit_radius(R, hill)
-    v_circ, T = circular_orbit_stats(mu_ast, r_orbit)
-    dv_insert = v_circ if params.rendezvous and not params.aerocapture else 0.0
-
-    # Mass flow across burns
-    m1 = mass_after_burn(params.m0_kg, chain.dv_leo_escape, params.Isp_s)
-    m2 = mass_after_burn(m1, chain.dv_helio_dep, params.Isp_s)
-    m3 = mass_after_burn(m2, chain.dv_helio_arr, params.Isp_s)
-    m_final = mass_after_burn(m3, dv_insert, params.Isp_s)
-
-    return AsteroidScenario(
-        diameter_m=d_m,
-        radius_m=R,
-        density_kg_m3=params.density_kg_m3,
-        mass_kg=m_ast,
-        mu_m3s2=mu_ast,
-        hill_m=hill,
-        surface_g_m_s2=g_s,
-        chosen_orbit_radius_m=r_orbit,
-        altitude_over_surface_m=r_orbit - R,
-        v_circ_m_s=v_circ,
-        period_hours=(T/3600.0 if T > 0 else 0.0),
-        dv_insertion_m_s=dv_insert,
-        dv_total_including_insert_m_s=chain.dv_total_to_rendezvous + dv_insert,
-        m_final_after_all_burns_kg=m_final,
-        propellant_used_kg=params.m0_kg - m_final
-    )
-
-# --- Time & I/O helpers ---
-def load_neo_items(path: Path) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
-    p = Path(path)
-    if not p.exists():
-        sys.stderr.write(f"ERROR: Input file not found: {p}\n"
-                         f"Tip: use an absolute path, or cd into the folder with the JSON.\n")
-        sys.exit(2)
-    try:
-        data = json.loads(p.read_text())
-    except json.JSONDecodeError as e:
-        sys.stderr.write(f"ERROR: Failed to parse JSON in {p}:\n{e}\n")
-        sys.exit(3)
-    items = data.get("potentially_hazardous_neos") or data.get("neos") or []
-    if isinstance(items, dict):
-        items = [items]
-    return data, items
-
-def parse_close_approach_utc(item: Dict[str, Any]) -> Optional[datetime]:
-    ca = item.get("close_approach") or {}
-    s = ca.get("date_full") or ca.get("date") or None
+def parse_any_datetime(s: str) -> Optional[datetime]:
+    """
+    Accepts formats like:
+      - "2025-Aug-24 17:55"
+      - "2025-08-24T17:55:00Z" or offsets
+      - "2025-08-24"
+    Returns an aware datetime in UTC.
+    """
     if not s:
         return None
-    for fmt in ("%Y-%b-%d %H:%M", "%Y-%m-%d", "%Y-%m-%d %H:%M", "%Y-%b-%d %H:%M:%S"):
+    s = s.strip()
+    # Try a few common formats
+    fmts = [
+        "%Y-%b-%d %H:%M",      # "2025-Aug-24 17:55"
+        "%Y-%m-%dT%H:%M:%SZ",  # ISO Z
+        "%Y-%m-%dT%H:%M:%S.%fZ",
+        "%Y-%m-%dT%H:%M:%S%z",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d",
+    ]
+    for f in fmts:
         try:
-            return datetime.strptime(s, fmt).replace(tzinfo=timezone.utc)
+            dt = datetime.strptime(s, f)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            else:
+                dt = dt.astimezone(timezone.utc)
+            return dt
         except Exception:
             pass
-    return None
+    # As a last resort, try fromisoformat (Python ≥3.11 handles 'Z')
+    try:
+        dt = datetime.fromisoformat(s.replace("Z","+00:00"))
+        return dt.astimezone(timezone.utc)
+    except Exception:
+        return None
 
-def synodic_days(r2_AU: float) -> float:
-    """Approx synodic period (days) for Earth (1 AU) vs a circular target at r2_AU."""
-    T_earth = 365.25
-    T2 = 365.25 * (r2_AU ** 1.5)
-    denom = abs((1.0/T_earth) - (1.0/T2))
-    return 99999.0 if denom == 0 else (1.0 / denom)
+def hohmann_delta_v_and_tof(r1_m: float, r2_m: float, mu: float = MU_SUN) -> Tuple[float, float, float, float]:
+    """
+    Hohmann transfer between two circular, coplanar orbits.
+    Returns (dv1, dv2, tof_sec, v_inf_depart_approx)
 
-def roll_forward_arrival(arrive_dt: datetime, now_dt: datetime, r2_AU: float) -> Tuple[datetime, int, float]:
-    Tsyn = synodic_days(r2_AU)
-    delta_days = (now_dt - arrive_dt).total_seconds() / 86400.0
-    k = max(1, math.ceil(delta_days / Tsyn))
-    return arrive_dt + timedelta(days=k*Tsyn), k, Tsyn
+    dv1: departure heliocentric Δv at r1 (m/s)
+    dv2: arrival heliocentric Δv at r2 (m/s)
+    tof_sec: π * sqrt(a_t^3 / μ)
+    v_inf_depart_approx: magnitude of departure Δv relative to planetary circular speed (≈ v_inf)
+    """
+    v1 = math.sqrt(mu / r1_m)
+    v2 = math.sqrt(mu / r2_m)
+    a_t = 0.5 * (r1_m + r2_m)
+    v_p = math.sqrt(mu * (2.0 / r1_m - 1.0 / a_t))  # speed on transfer at perihelion r1
+    v_a = math.sqrt(mu * (2.0 / r2_m - 1.0 / a_t))  # speed on transfer at aphelion r2
+    dv1 = abs(v_p - v1)
+    dv2 = abs(v2 - v_a)
+    tof = math.pi * math.sqrt(a_t ** 3 / mu)
+    v_inf = dv1  # in patched-conic approx, dv1 ≈ v_inf wrt Earth
+    return dv1, dv2, tof, v_inf
 
-# --- Main ---
-def main():
-    ap = argparse.ArgumentParser(description="NEO Intercept Planner → JSON (Hohmann + size-based stable orbit)")
-    ap.add_argument("input", nargs="?", help="Path to NEO JSON (defaults to $OUT_FILE or data/hazardous_neos/latest.json)")
-    ap.add_argument("--output", type=str, help="Output JSON path (default: <input>_intercept.json)")
-    ap.add_argument("--profile", type=str, choices=["neosurveyor", "custom"], default="neosurveyor",
-                    help="Spacecraft profile (default: neosurveyor)")
-    ap.add_argument("--r2-au", type=float, default=1.0, help="Target semi-major axis (AU). Use asteroid 'a' for accuracy.")
-    ap.add_argument("--leo-alt", type=float, default=None, help="LEO altitude (km). Overrides profile default if set.")
-    ap.add_argument("--isp", type=float, default=None, help="Specific impulse (s). Overrides profile default if set.")
-    ap.add_argument("--m0", type=float, default=None, help="Initial mass in LEO (kg). Overrides profile default if set.")
-    ap.add_argument("--density", type=float, default=2200.0, help="Asteroid bulk density (kg/m^3).")
-    ap.add_argument("--no-rendezvous", action="store_true", help="Do not match asteroid heliocentric velocity (flyby).")
-    ap.add_argument("--aerocapture", action="store_true", help="Skip arrival Δv (placeholder).")
-    ap.add_argument("--arrive-utc", type=str, default=None,
-                    help="Arrival UTC 'YYYY-mm-dd[ HH:MM]'. Overrides close_approach.date_full.")
-    ap.add_argument("--window-policy", choices=["roll", "error", "ignore"], default="roll",
-                    help="If arrival is in the past: roll (add synodic periods), error, or ignore. Default: roll.")
-    args = ap.parse_args()
+def leo_escape_dv(v_inf: float, leo_alt_m: float = DEFAULT_LEO_ALT_M) -> float:
+    """
+    Δv from circular LEO to achieve hyperbolic excess v_inf leaving Earth.
+    Uses: Δv_LEO = sqrt(v_inf^2 + v_esc^2) - v_circ, where v_esc = sqrt(2)*v_circ.
+    """
+    r_park = R_EARTH + leo_alt_m
+    v_circ = math.sqrt(MU_EARTH / r_park)
+    v_esc = math.sqrt(2.0) * v_circ
+    return math.sqrt(v_inf**2 + v_esc**2) - v_circ
 
-    # Resolve input/output paths (defaults to your snapshot and a separate intercept file)
-    default_in = os.environ.get("OUT_FILE", "data/hazardous_neos/latest.json")
-    input_path = Path(args.input or default_in)
-    output_path = Path(args.output) if args.output else input_path.with_name(input_path.stem + "_intercept.json")
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+def synodic_period_days(r1_m: float, r2_m: float, mu: float = MU_SUN) -> float:
+    """
+    Synodic period between two circular orbits: P_syn = 2π / |n1 - n2|
+    where n = sqrt(μ / r^3). Returns days.
+    """
+    n1 = math.sqrt(mu / (r1_m ** 3))
+    n2 = math.sqrt(mu / (r2_m ** 3))
+    if abs(n1 - n2) < 1e-15:
+        return 1e9  # effectively infinite; avoid divide-by-zero
+    psyn = 2.0 * math.pi / abs(n1 - n2)  # seconds
+    return psyn / 86400.0
 
-    # Input JSON
-    base_data, items = load_neo_items(input_path)
-    if not items:
-        # Write a passthrough file with a generation timestamp so CI still commits an artifact
-        out_data = dict(base_data)
-        out_data["solutions_generated_utc"] = datetime.now(timezone.utc).isoformat()
-        output_path.write_text(json.dumps(out_data, indent=2))
-        print(f"No NEOs found; wrote passthrough file: {output_path}")
-        return
+def roll_forward(arrival_utc: datetime, psyn_days: float, now_utc: datetime) -> Tuple[datetime, bool, int]:
+    """
+    If arrival_utc <= now_utc, add k * P_syn (in days) until it's future.
+    Returns (rolled_arrival, rolled?, k)
+    """
+    if arrival_utc > now_utc:
+        return arrival_utc, False, 0
+    if psyn_days > 1e8:  # guard
+        # If synodic is effectively infinite, just move arrival to tomorrow
+        k = math.ceil((now_utc - arrival_utc).total_seconds() / 86400.0)
+        return arrival_utc + timedelta(days=k), True, k
+    delta_days = (now_utc - arrival_utc).total_seconds() / 86400.0
+    k = math.ceil(delta_days / psyn_days)
+    rolled = arrival_utc + timedelta(days=k * psyn_days)
+    return rolled, True, k
 
-    # Build mission inputs (profile first)
-    if args.profile == "neosurveyor":
-        preset = PROFILES["neosurveyor"]
-        h_leo_km = preset["h_leo_km"] if args.leo_alt is None else args.leo_alt
-        isp_s = preset["Isp_s"] if args.isp is None else args.isp
-        m0_kg = preset["m0_kg"] if args.m0 is None else args.m0
-        prof_note = preset["note"]
-    else:
-        h_leo_km = 500.0 if args.leo_alt is None else args.leo_alt
-        isp_s = 230.0 if args.isp is None else args.isp
-        m0_kg = 1300.0 if args.m0 is None else args.m0
-        prof_note = "Custom profile (defaults align with NEOSurveyor-like unless overridden)."
-
-    params = MissionInputs(
-        r2_AU=args.r2_au,
-        h_leo_km=h_leo_km,
-        Isp_s=isp_s,
-        m0_kg=m0_kg,
-        density_kg_m3=args.density,
-        rendezvous=(not args.no_rendezvous),
-        aerocapture=args.aerocapture,
-        profile=args.profile,
-        profile_note=prof_note
-    )
-
-    # Arrival time (user override or from the JSON)
-    arrive_dt_user: Optional[datetime] = None
-    if args.arrive_utc:
-        for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d"):
+def pick_target_r2_au(neo: Dict[str, Any], default_r2_au: float) -> float:
+    """
+    Try to infer a plausible r2 (AU). If snapshot includes orbital data with 'semi_major_axis', use it.
+    Else fallback to default_r2_au.
+    """
+    # Try common locations the feed might use
+    for key in ("orbital_data", "orbit", "elements"):
+        d = neo.get(key)
+        if isinstance(d, dict):
+            a = d.get("semi_major_axis") or d.get("a") or d.get("a_AU")
             try:
-                arrive_dt_user = datetime.strptime(args.arrive_utc, fmt).replace(tzinfo=timezone.utc)
-                break
-            except ValueError:
-                continue
-        if arrive_dt_user is None:
-            print("WARNING: --arrive-utc not parseable; ignoring.", file=sys.stderr)
+                if a:
+                    return float(a)
+            except Exception:
+                pass
+    return float(default_r2_au)
 
-    # Shared Hohmann chain (depends on r2_AU & parking orbit)
-    chain = plan_chain(params)
+def estimate_asteroid_mass_and_mu(neo: Dict[str, Any]) -> Tuple[Optional[float], Optional[float], Optional[float]]:
+    """
+    Estimate radius (m), mass (kg), and mu=G*M (m^3/s^2) from diameter bounds and density.
+    Returns (R, M, mu) or (None, None, None) if insufficient data.
+    """
+    d = neo.get("estimated_diameter_m_min"), neo.get("estimated_diameter_m_max")
+    if d[0] is None or d[1] is None:
+        return None, None, None
+    d_mean = 0.5 * (float(d[0]) + float(d[1]))  # meters
+    r = 0.5 * d_mean
+    volume = (4.0/3.0) * math.pi * r**3
+    M = RHO_ASTEROID * volume
+    # G:
+    G = 6.67430e-11
+    mu = G * M
+    return r, M, mu
 
-    # Build output by cloning input and annotating each NEO with intercept_plan
-    out_data = dict(base_data)
-    key = "potentially_hazardous_neos" if "potentially_hazardous_neos" in base_data else "neos"
-    annotated_items = []
-    now_utc = datetime.now(timezone.utc)
+def plan_for_neo(
+    neo: Dict[str, Any],
+    r1_au: float,
+    default_r2_au: float,
+    leo_alt_m: float,
+    profile: Dict[str, Any],
+    arrival_override: Optional[datetime],
+    roll_past: bool,
+    now_utc: datetime
+) -> Dict[str, Any]:
+    # r2 selection
+    r2_au = pick_target_r2_au(neo, default_r2_au)
+    r1_m = r1_au * AU
+    r2_m = r2_au * AU
 
-    for it in items:
-        neo = dict(it)
+    # Hohmann
+    dv1, dv2, tof_sec, v_inf = hohmann_delta_v_and_tof(r1_m, r2_m, MU_SUN)
+    dv_leo = leo_escape_dv(v_inf, leo_alt_m)
+    total_dv = dv_leo + dv2  # not including asteroid capture
 
-        # Arrival/departure timestamps (if known)
-        timing_meta: Dict[str, Any] = {}
-        arrive_dt = arrive_dt_user or parse_close_approach_utc(neo)
-        if arrive_dt and arrive_dt <= now_utc:
-            if args.window_policy == "error":
-                raise SystemExit(f"Arrival {arrive_dt.isoformat()} is in the past. "
-                                 f"Use --arrive-utc (future) or --window-policy roll.")
-            elif args.window_policy == "roll":
-                new_arrive, k, Tsyn = roll_forward_arrival(arrive_dt, now_utc, params.r2_AU)
-                timing_meta = {"rolled_forward_windows": k, "synodic_days": Tsyn}
-                arrive_dt = new_arrive
+    # Dates: try to find arrival in the NEO blob if not overridden
+    arrival_dt = None
+    if arrival_override:
+        arrival_dt = arrival_override
+    else:
+        # Check a few likely spots for a date string
+        # 1) neo['close_approach']['date_full']
+        ca = neo.get("close_approach") or neo.get("close_approach_data")
+        if isinstance(ca, dict):
+            arrival_dt = parse_any_datetime(ca.get("date_full") or ca.get("close_approach_date_full") or ca.get("date"))
+        elif isinstance(ca, list) and ca:
+            # take the soonest Earth approach entry if available
+            earth_first = None
+            for entry in ca:
+                if entry.get("orbiting_body") == "Earth":
+                    earth_first = entry
+                    break
+            cand = earth_first or ca[0]
+            arrival_dt = parse_any_datetime(
+                cand.get("date_full") or cand.get("close_approach_date_full") or cand.get("close_approach_date")
+            )
+    if arrival_dt is None:
+        # Default to "now + TOF", i.e., launch now
+        arrival_dt = now_utc + timedelta(seconds=tof_sec)
 
-        depart_dt = (arrive_dt - timedelta(days=chain.tof_days)) if arrive_dt else None
+    # Roll forward if requested
+    psyn_days = synodic_period_days(r1_m, r2_m, MU_SUN)
+    rolled = False
+    k_roll = 0
+    if roll_past:
+        arrival_dt, rolled, k_roll = roll_forward(arrival_dt, psyn_days, now_utc)
 
-        # Diameter candidates
-        dmin = neo.get("estimated_diameter_m_min") \
-               or neo.get("estimated_diameter", {}).get("meters", {}).get("estimated_diameter_min")
-        dmax = neo.get("estimated_diameter_m_max") \
-               or neo.get("estimated_diameter", {}).get("meters", {}).get("estimated_diameter_max")
+    # Launch = arrival - TOF
+    depart_dt = arrival_dt - timedelta(seconds=tof_sec)
 
-        scenarios_block: Dict[str, Any] = {}
-        if dmin is not None:
-            scn_min = scenario_for_diameter(float(dmin), params, chain)
-            scenarios_block["min_diameter"] = {
-                "diameter_m": scn_min.diameter_m,
-                "asteroid_mu_m3s2": scn_min.mu_m3s2,
-                "asteroid_hill_radius_m": scn_min.hill_m,
-                "surface_g_m_s2": scn_min.surface_g_m_s2,
-                "chosen_orbit_radius_m": scn_min.chosen_orbit_radius_m,
-                "altitude_over_surface_m": scn_min.altitude_over_surface_m,
-                "v_circ_m_s": scn_min.v_circ_m_s,
-                "period_hours": scn_min.period_hours,
-                "dv_insertion_m_s": scn_min.dv_insertion_m_s,
-                "dv_total_including_insert_m_s": scn_min.dv_total_including_insert_m_s,
-                "final_mass_kg": scn_min.m_final_after_all_burns_kg,
-                "propellant_used_kg": scn_min.propellant_used_kg
-            }
-        if dmax is not None and (dmin is None or float(dmax) != float(dmin)):
-            scn_max = scenario_for_diameter(float(dmax), params, chain)
-            scenarios_block["max_diameter"] = {
-                "diameter_m": scn_max.diameter_m,
-                "asteroid_mu_m3s2": scn_max.mu_m3s2,
-                "asteroid_hill_radius_m": scn_max.hill_m,
-                "surface_g_m_s2": scn_max.surface_g_m_s2,
-                "chosen_orbit_radius_m": scn_max.chosen_orbit_radius_m,
-                "altitude_over_surface_m": scn_max.altitude_over_surface_m,
-                "v_circ_m_s": scn_max.v_circ_m_s,
-                "period_hours": scn_max.period_hours,
-                "dv_insertion_m_s": scn_max.dv_insertion_m_s,
-                "dv_total_including_insert_m_s": scn_max.dv_total_including_insert_m_s,
-                "final_mass_kg": scn_max.m_final_after_all_burns_kg,
-                "propellant_used_kg": scn_max.propellant_used_kg
-            }
-
-        neo["intercept_plan"] = {
-            "profile": params.profile,
-            "profile_note": params.profile_note,
-            "assumptions": {
-                "r2_AU": params.r2_AU,
-                "leo_alt_km": params.h_leo_km,
-                "Isp_s": params.Isp_s,
-                "m0_kg": params.m0_kg,
-                "density_kg_m3": params.density_kg_m3,
-                "rendezvous": params.rendezvous,
-                "aerocapture": params.aerocapture
-            },
-            "timing": {
-                "arrive_utc": (arrive_dt.isoformat() if arrive_dt else None),
-                "depart_utc": (depart_dt.isoformat() if depart_dt else None),
-                "transfer_time_days": chain.tof_days,
-                "phase_angle_deg": chain.phase_angle_deg,
-                "meta": timing_meta or None
-            },
-            "heliocentric_chain": {
-                "dv_helio_dep_m_s": chain.dv_helio_dep,
-                "dv_helio_arr_m_s": chain.dv_helio_arr,
-                "dv_leo_escape_m_s": chain.dv_leo_escape,
-                "dv_total_to_rendezvous_m_s": chain.dv_total_to_rendezvous,
-                "v_inf_dep_m_s": chain.v_inf_dep
-            },
-            "stable_orbit_scenarios": scenarios_block
+    # Simple on-asteroid orbit heuristic
+    R_ast, M_ast, mu_ast = estimate_asteroid_mass_and_mu(neo)
+    suggested_orbit = None
+    if R_ast is not None and mu_ast is not None:
+        alt = max(3.0 * R_ast, 1000.0)  # meters
+        r_orb = R_ast + alt
+        v_circ = math.sqrt(mu_ast / r_orb) if mu_ast > 0 else None
+        T = (2.0 * math.pi * r_orb / v_circ) if v_circ and v_circ > 0 else None
+        suggested_orbit = {
+            "radius_m": r_orb,
+            "altitude_m": alt,
+            "circular_speed_m_s": v_circ,
+            "period_s": T,
+            "note": "alt >= max(3R, 1 km); density 2 g/cc assumed",
+        }
+    else:
+        suggested_orbit = {
+            "radius_m": None,
+            "altitude_m": 1000.0,
+            "circular_speed_m_s": None,
+            "period_s": None,
+            "note": "Diameter missing; defaulting to >=1 km altitude heuristic.",
         }
 
-        annotated_items.append(neo)
+    # Rocket equation prop estimate for total_dv (very rough)
+    m0 = profile["m0_kg"]
+    isp = profile["Isp_s"]
+    if isp > 0 and total_dv > 0:
+        mr = math.exp(total_dv / (isp * G0))  # mass ratio m0/mf
+        mf = m0 / mr
+        prop_used = max(m0 - mf, 0.0)
+    else:
+        prop_used = 0.0
 
-    out_data[key] = annotated_items
-    out_data["solutions_generated_utc"] = datetime.now(timezone.utc).isoformat()
-    output_path.write_text(json.dumps(out_data, indent=2))
+    plan = {
+        "schema_version": SCHEMA_VERSION,
+        "profile": profile["name"],
+        "r1_AU": r1_au,
+        "r2_AU": r2_au,
+        "tof_days": tof_sec / 86400.0,
+        "synodic_days": psyn_days,
+        "arrival_utc": iso_z(arrival_dt),
+        "departure_utc": iso_z(depart_dt),
+        "rolled_forward": rolled,
+        "roll_periods_added": k_roll,
+        "dv_depart_heliocentric_m_s": dv1,
+        "dv_arrive_heliocentric_m_s": dv2,
+        "v_inf_m_s": v_inf,
+        "dv_from_LEO_m_s": dv_leo,
+        "dv_total_m_s": total_dv,
+        "leo_altitude_m": leo_alt_m,
+        "spacecraft_mass_kg": m0,
+        "Isp_s": isp,
+        "propellant_estimate_kg": prop_used,
+        "suggested_orbit": suggested_orbit,
+        "notes": "Circular/coplanar Hohmann; Earth SOI patched-conic; arrival date rolled if in past and --roll-past set.",
+    }
+    return plan
 
-    print(f"Wrote: {output_path}")
-    print(f"Assumed profile: {params.profile} | r2_AU={params.r2_AU} | LEO={params.h_leo_km} km | Isp={params.Isp_s} s | m0={params.m0_kg} kg")
-    print(f"Chain: Δv_dep={chain.dv_helio_dep:.1f} m/s, Δv_arr={chain.dv_helio_arr:.1f} m/s, "
-          f"LEO→esc={chain.dv_leo_escape:.1f} m/s, v∞={chain.v_inf_dep:.1f} m/s, TOF={chain.tof_days:.2f} d")
+def load_json(path: str) -> Dict[str, Any]:
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+def write_json(obj: Dict[str, Any], path: str) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(obj, f, indent=2, sort_keys=False)
+
+def derive_default_output(in_path: str) -> str:
+    d, base = os.path.split(in_path)
+    name, ext = os.path.splitext(base)
+    out_name = f"{name}_intercept.json"
+    return os.path.join(d, out_name)
+
+def build_profile(name: str, m0_kg: float, isp_s: float) -> Dict[str, Any]:
+    return {"name": name, "m0_kg": float(m0_kg), "Isp_s": float(isp_s)}
+
+def main():
+    parser = argparse.ArgumentParser(description="Compute simple intercept plans for hazardous NEOs.")
+    parser.add_argument("--input", default=os.getenv("OUT_FILE", "data/hazardous_neos/latest.json"))
+    parser.add_argument("--output", default=None, help="Explicit output path (JSON). If omitted, writes *_intercept.json next to input.")
+    parser.add_argument("--r1-au", type=float, default=1.0, help="Departure circular orbit radius around Sun (AU). Default 1.0 AU.")
+    parser.add_argument("--r2-au", type=float, default=None, help="Override target circular orbit radius (AU) for ALL NEOs.")
+    parser.add_argument("--leo-km", type=float, default=500.0, help="Parking orbit altitude in km. Default 500.")
+    parser.add_argument("--arrive-utc", type=str, default=None, help="Force arrival time (ISO/Z or 'YYYY-Mon-DD HH:MM').")
+    parser.add_argument("--roll-past", action="store_true", help="If arrival is in the past, roll it forward by whole synodic periods.")
+    parser.add_argument("--profile", choices=["neosurveyor", "custom"], default="neosurveyor")
+    parser.add_argument("--m0-kg", type=float, default=1300.0, help="Only for --profile custom.")
+    parser.add_argument("--Isp-s", type=float, default=230.0, help="Only for --profile custom.")
+
+    args = parser.parse_args()
+    now_utc = datetime.now(timezone.utc)
+
+    if args.profile == "neosurveyor":
+        prof = build_profile("neosurveyor", 1300.0, 230.0)
+    else:
+        prof = build_profile("custom", args.m0_kg, args.Isp_s)
+
+    in_path = args.input
+    out_path = args.output or derive_default_output(in_path)
+    r1_au = float(args.r1_au)
+    default_r2_au = float(args.r2_au) if args.r2_au else 1.0
+    leo_alt_m = float(args.leo_km) * 1e3
+    arrival_override = parse_any_datetime(args.arrive_utc) if args.arrive_utc else None
+
+    data = load_json(in_path)
+
+    # Accept either a compact list or the prior "potentially_hazardous_neos" shape
+    neos = None
+    if isinstance(data, dict):
+        neos = data.get("potentially_hazardous_neos") or data.get("neos") or data.get("data") or data.get("objects")
+    if neos is None:
+        # Maybe the file IS the list
+        if isinstance(data, list):
+            neos = data
+        else:
+            print("ERROR: Could not find NEO list in input JSON.", file=sys.stderr)
+            sys.exit(2)
+
+    plans = []
+    for neo in neos:
+        try:
+            plan = plan_for_neo(
+                neo=neo,
+                r1_au=r1_au,
+                default_r2_au=default_r2_au,
+                leo_alt_m=leo_alt_m,
+                profile=prof,
+                arrival_override=arrival_override,
+                roll_past=args.roll_past,
+                now_utc=now_utc
+            )
+            # Attach non-destructively
+            neo_out = dict(neo)
+            neo_out["intercept_plan"] = plan
+            plans.append(neo_out)
+        except Exception as e:
+            # Be forgiving; record failure for this NEO
+            plans.append({
+                "name": neo.get("name"),
+                "neo_reference_id": neo.get("neo_reference_id"),
+                "error": f"{type(e).__name__}: {e}"
+            })
+
+    out_obj = {
+        "date_utc": now_utc.date().isoformat(),
+        "snapshot_utc": iso_z(now_utc),
+        "count": len(plans),
+        "schema": {
+            "version": SCHEMA_VERSION,
+            "source": "neo_intercept_planner.py",
+            "assumptions": {
+                "circular_coplanar": True,
+                "density_kg_m3": RHO_ASTEROID,
+                "leo_alt_km": leo_alt_m / 1e3
+            }
+        },
+        "potentially_hazardous_neos": plans
+    }
+    write_json(out_obj, out_path)
+    print(f"Wrote intercept plans → {out_path}")
 
 if __name__ == "__main__":
     main()
