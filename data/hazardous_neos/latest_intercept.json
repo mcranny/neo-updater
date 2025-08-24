@@ -1,0 +1,81 @@
+{
+  "date_utc": "2025-08-24",
+  "snapshot_utc": "2025-08-24T23:02:45Z",
+  "count": 1,
+  "potentially_hazardous_neos": [
+    {
+      "name": "(2023 OQ)",
+      "neo_reference_id": "54375474",
+      "absolute_magnitude_h": 21.85,
+      "estimated_diameter_m_min": 113.3848360975,
+      "estimated_diameter_m_max": 253.5362011316,
+      "close_approach": {
+        "date_full": "2025-Aug-24 17:55",
+        "orbiting_body": "Earth",
+        "miss_distance_km": 36661352.94084104,
+        "relative_velocity_km_s": 13.9396974019
+      },
+      "intercept_plan": {
+        "profile": "neosurveyor",
+        "profile_note": "NEO Surveyor\u2013like mass; Isp assumed hydrazine monoprop (~230 s).",
+        "assumptions": {
+          "r2_AU": 1.0,
+          "leo_alt_km": 500.0,
+          "Isp_s": 230.0,
+          "m0_kg": 1300.0,
+          "density_kg_m3": 2200.0,
+          "rendezvous": true,
+          "aerocapture": false
+        },
+        "timing": {
+          "arrive_utc": "2299-06-08T17:55:00+00:00",
+          "depart_utc": "2298-12-08T02:50:01.990879+00:00",
+          "transfer_time_days": 182.62844917963588,
+          "phase_angle_deg": 0.0,
+          "meta": {
+            "rolled_forward_windows": 1,
+            "synodic_days": 99999.0
+          }
+        },
+        "heliocentric_chain": {
+          "dv_helio_dep_m_s": 0.0,
+          "dv_helio_arr_m_s": 0.0,
+          "dv_leo_escape_m_s": 3153.245710837261,
+          "dv_total_to_rendezvous_m_s": 3153.245710837261,
+          "v_inf_dep_m_s": 0.0
+        },
+        "stable_orbit_scenarios": {
+          "min_diameter": {
+            "diameter_m": 113.3848360975,
+            "asteroid_mu_m3s2": 0.11207066697984214,
+            "asteroid_hill_radius_m": 9804.19110449172,
+            "surface_g_m_s2": 3.486920089946358e-05,
+            "chosen_orbit_radius_m": 1000.0,
+            "altitude_over_surface_m": 943.30758195125,
+            "v_circ_m_s": 0.010586343418756174,
+            "period_hours": 164.86610937843489,
+            "dv_insertion_m_s": 0.010586343418756174,
+            "dv_total_including_insert_m_s": 3153.2562971806797,
+            "final_mass_kg": 321.2141360796796,
+            "propellant_used_kg": 978.7858639203205
+          },
+          "max_diameter": {
+            "diameter_m": 253.5362011316,
+            "asteroid_mu_m3s2": 1.252988148252125,
+            "asteroid_hill_radius_m": 21922.83777403514,
+            "surface_g_m_s2": 7.796990353227215e-05,
+            "chosen_orbit_radius_m": 1000.0,
+            "altitude_over_surface_m": 873.2318994342,
+            "v_circ_m_s": 0.03539757263220354,
+            "period_hours": 49.30646714476932,
+            "dv_insertion_m_s": 0.03539757263220354,
+            "dv_total_including_insert_m_s": 3153.281108409893,
+            "final_mass_kg": 321.21060268598075,
+            "propellant_used_kg": 978.7893973140192
+          }
+        }
+      }
+    }
+  ],
+  "solutions_generated_utc": "2025-08-24T23:02:46.236866+00:00"
+}
