@@ -1,6 +1,20 @@
 {
-  "date_utc": "2025-08-23",
-  "snapshot_utc": "2025-08-23T23:20:26Z",
-  "count": 0,
-  "potentially_hazardous_neos": []
+  "date_utc": "2025-08-24",
+  "snapshot_utc": "2025-08-24T00:52:44Z",
+  "count": 1,
+  "potentially_hazardous_neos": [
+    {
+      "name": "(2023 OQ)",
+      "neo_reference_id": "54375474",
+      "absolute_magnitude_h": 21.85,
+      "estimated_diameter_m_min": 113.3848360975,
+      "estimated_diameter_m_max": 253.5362011316,
+      "close_approach": {
+        "date_full": "2025-Aug-24 17:55",
+        "orbiting_body": "Earth",
+        "miss_distance_km": 36661352.94084104,
+        "relative_velocity_km_s": 13.9396974019
+      }
+    }
+  ]
 }
