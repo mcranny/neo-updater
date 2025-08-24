@@ -2,7 +2,7 @@ name: Hazardous NEOs 4x Daily
 
 on:
   schedule:
-    - cron: "0 0,6,12,18 * * *"   # 00:00, 06:00, 12:00, 18:00 UTC
+    - cron: "0 0,6,12,18 * * *" # 00:00, 06:00, 12:00, 18:00 UTC
   workflow_dispatch:
 
 concurrency:
@@ -25,6 +25,14 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.x"
+          cache: "pip"
+
+      - name: Install dependencies (if any)
+        run: |
+          if [ -f requirements.txt ]; then
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+          fi
 
       - name: Run updater
         env:
@@ -35,11 +43,11 @@ jobs:
       - name: Plan intercepts
         env:
           OUT_FILE: data/hazardous_neos/latest.json
-        run: python -m scripts.neo_intercept_planner --output data/hazardous_neos/latest_intercept.json
+        run: |
+          python -m scripts.neo_intercept_planner \
+            --output data/hazardous_neos/latest_intercept.json \
+            --roll-past
 
-      # Commit as YOUR account so contributions count on your heatmap.
-      # Replace the email below with your GitHub noreply address:
-      #   <YOUR_ID>+mcranny@users.noreply.github.com
       - name: Commit & push if changed
         env:
           GIT_AUTHOR_NAME: "Matthew Cranny"
@@ -47,11 +55,11 @@ jobs:
           GIT_COMMITTER_NAME: "Matthew Cranny"
           GIT_COMMITTER_EMAIL: "163694578+mcranny@users.noreply.github.com"
         run: |
+          git config user.name "${GIT_COMMITTER_NAME}"
+          git config user.email "${GIT_COMMITTER_EMAIL}"
           if [[ -n "$(git status --porcelain)" ]]; then
-            git config user.name "${GIT_COMMITTER_NAME}"
-            git config user.email "${GIT_COMMITTER_EMAIL}"
             git add -A
-            git commit -m "Update hazardous NEO snapshot & intercepts: $(date -u +%F)"
+            git commit -m "Update hazardous NEO snapshot & intercepts (roll-past): $(date -u +%F)"
             git push
           else
             echo "No changes to commit."
