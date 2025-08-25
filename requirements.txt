@@ -1,13 +1,11 @@
-# Runtime (updater + planner)
-requests>=2.31,<3
-python-dateutil>=2.8.2,<3
-python-dotenv>=1.0,<2
-
-# Viewer (Qt) — install on macOS/Windows; skipped on Linux CI
-PySide6>=6.8; platform_system != "Linux"
-
-# Dev/Test
-pytest>=8,<9
-jsonschema>=4.22,<5
-ruff>=0.5,<0.6
-black>=24.8,<25
+ requests
+ python-dateutil
+ python-dotenv
+numpy>=2.3
+ # Viewer (local only)
+ PySide6>=6.8; platform_system!="Linux"
+ # Dev/test
+ pytest
+ jsonschema
+ ruff
+ black

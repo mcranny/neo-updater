@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 """
-NEO Updater — GMAT/KSP-style Qt Viewer
+NEO Updater — GMAT/KSP-style Qt Viewer (Lambert-aware)
 - Big canvas (dark theme), table on bottom
 - Distinct Earth/Target orbits + gold transfer
-- Kepler-timed motion for Earth, Target, and transfer (Hohmann half-ellipse)
-- **Runs until intercept** (auto-pauses) or marks **closest approach**
-- Spacecraft trail, zoom (wheel), pan (drag)
+- Kepler-timed motion for Earth/Target and transfer (Hohmann half-ellipse) in legacy mode
+- **Lambert mode**: draw solver polyline, animate SC along it, mark intercept at arc end
+- Intercept vs closest approach detection; trail; zoom/pan
 - Visual orbit offset when r1≈r2 (clarity only; HUD note shows)
+
 Requires:  pip install PySide6
 """
 from __future__ import annotations
 import json, math, sys
 from pathlib import Path
-from typing import List
+from typing import List, Tuple
 from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex, QTimer, QRectF, QPointF
 from PySide6.QtGui import (QPalette, QColor, QBrush, QPen, QFont, QAction,
                            QPainter, QPainterPath)
@@ -20,7 +21,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QSplitter, QTableView, QFileDialog,
     QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QSlider, QToolBar, QMessageBox,
     QGraphicsView, QGraphicsScene, QGraphicsEllipseItem, QGraphicsSimpleTextItem,
-    QGraphicsPathItem, QGraphicsLineItem, QStyleFactory, QSizePolicy
+    QGraphicsPathItem, QGraphicsLineItem, QStyleFactory
 )
 
 DEFAULT_INTERCEPT = Path("data/hazardous_neos/latest_intercept.json")
@@ -49,6 +50,7 @@ def _round_sig(x, sig=3):
     if x in (None,0): return x
     try: return round(x, sig - int(math.floor(math.log10(abs(x)))) - 1)
     except Exception: return x
+
 class NEOTableModel(QAbstractTableModel):
     def __init__(self, rows: list[dict]): super().__init__(); self.rows=rows
     def rowCount(self, parent=QModelIndex()): return len(self.rows)
@@ -71,6 +73,7 @@ class NEOTableModel(QAbstractTableModel):
         self.layoutAboutToBeChanged.emit()
         self.rows.sort(key=kf, reverse=(order==Qt.DescendingOrder))
         self.layoutChanged.emit()
+
 def load_intercepts(path: Path) -> tuple[list[dict], list[dict]]:
     blob=json.load(open(path,"r",encoding="utf-8"))
     items=blob.get("potentially_hazardous_neos") or blob.get("neos") or []
@@ -107,7 +110,8 @@ def kepler_E_from_M(M: float, e: float, tol=1e-10, maxit=32) -> float:
 # ------------- Orbit canvas -------------
 class OrbitView(QGraphicsView):
     """GMAT/KSP-like canvas with proper intercept timing.
-    Physics (r1_AU, r2_AU) is kept separate from drawing (r*_draw) so the visual offset never breaks rendezvous.
+    Legacy: Hohmann half-ellipse with phasing on circular/coplanar orbits.
+    Lambert mode: draw polyline from planner, animate SC on it, intercept at arc end.
     """
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -130,7 +134,7 @@ class OrbitView(QGraphicsView):
         self.n1 = mean_motion(self.r1_phys)
         self.n2 = mean_motion(self.r2_phys)
 
-        # target initial phase so it is at the rendezvous angle at t = TOF
+        # target initial phase for legacy phasing
         self.thetaN0 = 0.0
 
         # ---- DRAWING (AU, visual only) ----
@@ -140,6 +144,10 @@ class OrbitView(QGraphicsView):
         self.b_draw = 1.0
         self.e_draw = 0.0
         self.visual_note = ""
+
+        # Lambert
+        self.use_lambert: bool = False
+        self.lambert_pts: List[Tuple[float,float]] = []  # [(x_AU,y_AU), ...]
 
         # ---- TIME / STATE ----
         self.t_days = 0.0
@@ -169,7 +177,7 @@ class OrbitView(QGraphicsView):
         self.sun = QGraphicsEllipseItem()
         self.earthOrbit = QGraphicsEllipseItem()
         self.neoOrbit = QGraphicsEllipseItem()
-        self.transfer = QGraphicsEllipseItem()
+        self.transfer = QGraphicsEllipseItem()        # legacy Hohmann
         self.scTrack = QGraphicsPathItem()
         self.earthDot = QGraphicsEllipseItem()
         self.neoDot = QGraphicsEllipseItem()
@@ -252,7 +260,7 @@ class OrbitView(QGraphicsView):
         self.r2_phys = float(plan.get("r2_AU", plan.get("r2", 1.0)))
         self.tof_days = float(plan.get("tof_days", 0.0)) or (0.5 * period_years(0.5*(self.r1_phys+self.r2_phys)) * 365.25 * 2)  # fallback
 
-        # PHYS transfer ellipse
+        # PHYS transfer ellipse (legacy)
         self.a_phys = 0.5 * (self.r1_phys + self.r2_phys)
         self.b_phys = math.sqrt(max(1e-12, self.r1_phys * self.r2_phys))
         self.e_phys = math.sqrt(max(0.0, 1.0 - (self.b_phys*self.b_phys)/(self.a_phys*self.a_phys)))
@@ -261,12 +269,9 @@ class OrbitView(QGraphicsView):
         self.n1 = mean_motion(self.r1_phys)
         self.n2 = mean_motion(self.r2_phys)
 
-        # Target phase so target is at rendezvous angle at t=TOF (π for outward, 0 for inward)
+        # Legacy target phase (π for outward, 0 for inward)
         tof_yrs = self.tof_days / 365.25
-        if self.r2_phys >= self.r1_phys:
-            rendez_angle = math.pi
-        else:
-            rendez_angle = 0.0
+        rendez_angle = math.pi if self.r2_phys >= self.r1_phys else 0.0
         self.thetaN0 = (rendez_angle - self.n2 * tof_yrs) % (2*math.pi)
 
         # DRAW radii (visual separation only if r1≈r2)
@@ -281,6 +286,17 @@ class OrbitView(QGraphicsView):
         self.a_draw = 0.5 * (self.r1_draw + self.r2_draw)
         self.b_draw = math.sqrt(max(1e-12, self.r1_draw * self.r2_draw))
         self.e_draw = math.sqrt(max(0.0, 1.0 - (self.b_draw*self.b_draw)/(self.a_draw*self.a_draw)))
+
+        # Lambert mode?
+        lambert = plan.get("lambert")
+        pts = plan.get("lambert_polyline_xy_au") or []
+        self.use_lambert = bool(lambert and pts)
+        self.lambert_pts = pts if self.use_lambert else []
+        if self.use_lambert:
+            try:
+                self.tof_days = float(lambert.get("tof_days", self.tof_days))
+            except Exception:
+                pass
 
         # reset state/markers
         self.t_days = 0.0; self.playing = False
@@ -306,13 +322,15 @@ class OrbitView(QGraphicsView):
         self.earthOrbit.setRect(QRectF(-r1,-r1,2*r1,2*r1))
         self.neoOrbit.setRect(QRectF(-r2,-r2,2*r2,2*r2))
         self.transfer.setRect(QRectF(-a + c, -b, 2*a, 2*b))
+        # Hide legacy ellipse in Lambert mode
+        self.transfer.setVisible(not self.use_lambert)
 
         # legend & note positions
         bb=self.scene.itemsBoundingRect(); lx,ly=bb.left()+14, bb.top()+14
         for i,(sw,txt) in enumerate(zip(self.legendSwatches,self.legendItems)):
             sw.setRect(QRectF(lx, ly+i*18, 10,10)); txt.setPos(lx+14, ly-2+i*18)
-        self.note.setText(self.visual_note)
-        if self.visual_note: self.note.setPos(bb.left()+14, bb.bottom()-24)
+        self.note.setText(self.visual_note or ("Lambert mode: trajectory from planner" if self.use_lambert else ""))
+        if self.visual_note or self.use_lambert: self.note.setPos(bb.left()+14, bb.bottom()-24)
 
     # ---------- animation ----------
     def _tick(self):
@@ -335,42 +353,75 @@ class OrbitView(QGraphicsView):
         self.closestRing.hide(); self.closestText.hide()
         self._update_state()
 
+    def _sc_xy_lambert(self, s: float) -> tuple[float,float]:
+        """Return SC xy (pixels) at current time along Lambert polyline."""
+        if not self.lambert_pts or self.tof_days <= 0:
+            return 0.0, 0.0
+        f = max(0.0, min(1.0, self.t_days / self.tof_days))
+        idx = min(int(f * (len(self.lambert_pts) - 1)), len(self.lambert_pts) - 1)
+        x_au, y_au = self.lambert_pts[idx]
+        return x_au*s, y_au*s
+
     def _update_state(self):
-        """Advance using PHYSICS timing; draw with DRAW geometry; stop at intercept."""
+        """Advance using PHYSICS timing; draw with DRAW geometry."""
         s = self._scale_px_per_AU()
         t_yrs = self.t_days / 365.25
 
-        # Earth & target angles (PHYS)
+        # Earth & target angles (legacy circular draw)
         thetaE = (self.n1 * t_yrs) % (2*math.pi)
         thetaN = (self.n2 * t_yrs + self.thetaN0) % (2*math.pi)
 
-        # Transfer anomaly: guarantee arrival at t=TOF  ->  M = π * (t/TOF)
-        M = math.pi * (self.t_days / self.tof_days)
-        E = kepler_E_from_M(M, self.e_phys)  # solve with PHYS eccentricity
+        # Legacy transfer anomaly for Hohmann
+        M = math.pi * (self.t_days / max(self.tof_days, 1e-9))
+        E = kepler_E_from_M(M, self.e_phys)
 
-        # DRAW coordinates: same E on the draw ellipse, and draw radii for planets
+        # Compute draw coordinates
         a = self.a_draw * s; b = self.b_draw * s; e = self.e_draw
-        x_sc = a * math.cos(E) - e * a
-        y_sc = b * math.sin(E)
+
+        # Spacecraft XY + trail
+        if self.use_lambert:
+            # position on Lambert arc
+            x_sc, y_sc = self._sc_xy_lambert(s)
+
+            # build trail along polyline up to current point
+            path = QPainterPath()
+            if self.lambert_pts:
+                idx = max(0, min(int((self.t_days / max(self.tof_days, 1e-9)) * (len(self.lambert_pts)-1)), len(self.lambert_pts)-1))
+                x0, y0 = self.lambert_pts[0]
+                path.moveTo(QPointF(x0*s, y0*s))
+                for k in range(1, idx+1):
+                    xk, yk = self.lambert_pts[k]
+                    path.lineTo(QPointF(xk*s, yk*s))
+            self.scTrack.setPath(path)
+        else:
+            # legacy half-ellipse position/trail
+            x_sc = a * math.cos(E) - e * a
+            y_sc = b * math.sin(E)
+            path = QPainterPath(QPointF(a - e*a, 0))
+            samples = max(60, int(180 * (M / math.pi)))
+            for i in range(1, samples+1):
+                Ei = (i / samples) * E
+                xi = a * math.cos(Ei) - e * a
+                yi = b * math.sin(Ei)
+                path.lineTo(QPointF(xi, yi))
+            self.scTrack.setPath(path)
+
+        # Earth/Target dots
         x_e  = self.r1_draw * s * math.cos(thetaE)
         y_e  = self.r1_draw * s * math.sin(thetaE)
-        x_n  = self.r2_draw * s * math.cos(thetaN)
-        y_n  = self.r2_draw * s * math.sin(thetaN)
+
+        if self.use_lambert and self.lambert_pts:
+            # Put the target dot at the Lambert arrival point so intercept is visually consistent
+            x_end, y_end = self.lambert_pts[-1]
+            x_n, y_n = x_end*s, y_end*s
+        else:
+            x_n  = self.r2_draw * s * math.cos(thetaN)
+            y_n  = self.r2_draw * s * math.sin(thetaN)
 
         # dots
         self.earthDot.setRect(QRectF(x_e-6,y_e-6,12,12))
         self.neoDot.setRect(QRectF(x_n-6,y_n-6,12,12))
         self.scDot.setRect(QRectF(x_sc-5,y_sc-5,10,10))
-
-        # trail (0..E)
-        path = QPainterPath(QPointF(a - e*a, 0))
-        samples = max(60, int(180 * (M / math.pi)))
-        for i in range(1, samples+1):
-            Ei = (i / samples) * E
-            xi = a * math.cos(Ei) - e * a
-            yi = b * math.sin(Ei)
-            path.lineTo(QPointF(xi, yi))
-        self.scTrack.setPath(path)
 
         # labels
         self._place_label(self.lblEarth,"Earth",x_e,y_e,self.r1_draw*s)
@@ -383,11 +434,20 @@ class OrbitView(QGraphicsView):
         if dist_px < self.closest_px:
             self.closest_px = dist_px; self.closest_pos = (x_sc, y_sc); self.closest_t = self.t_days
 
-        if not self.intercept_found and dist_px <= tol_px:
-            self.intercept_found = True
-            self._place_marker(self.interceptRing, self.interceptText, x_sc, y_sc,
-                               f"Intercept: t={self.t_days:.1f} d, Δ≈{(dist_px/s):.4f} AU")
-            if self.stop_at_intercept: self.pause()
+        if not self.intercept_found:
+            if self.use_lambert:
+                # In Lambert mode, consider the last polyline point as intercept target
+                if self.t_days >= self.tof_days - 1e-9:
+                    self.intercept_found = True
+                    self._place_marker(self.interceptRing, self.interceptText, x_sc, y_sc,
+                                       f"Intercept (Lambert): t={self.t_days:.1f} d")
+                    if self.stop_at_intercept: self.pause()
+            else:
+                if dist_px <= tol_px:
+                    self.intercept_found = True
+                    self._place_marker(self.interceptRing, self.interceptText, x_sc, y_sc,
+                                       f"Intercept: t={self.t_days:.1f} d, Δ≈{(dist_px/s):.4f} AU")
+                    if self.stop_at_intercept: self.pause()
 
         if self.t_days >= self.tof_days and not self.intercept_found and math.isfinite(self.closest_px):
             x,y = self.closest_pos
@@ -416,7 +476,7 @@ class OrbitView(QGraphicsView):
 class MainWindow(QMainWindow):
     def __init__(self, path: Path):
         super().__init__()
-        self.setWindowTitle("NEO Updater — GMAT/KSP Viewer")
+        self.setWindowTitle("NEO Updater — GMAT/KSP Viewer (Lambert)")
         self.resize(1320, 860)
 
         self.orbit=OrbitView()
@@ -490,10 +550,16 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self,"Load error",f"Failed to load:\n{e}")
 
     def _onSelect(self):
+        if not self.table.selectionModel(): return
         idxs=self.table.selectionModel().selectedRows()
         if not idxs: return
         r=idxs[0].row(); row=self.rows[r]; plan=row["_plan"]
-        self.hud.setText(f"{row['name']}  •  Δv={row['dv_total']} m/s  •  Depart {row['departure_utc']} → Arrive {row['arrival_utc']}")
+        # HUD dv/TOF from plan (Lambert TOF wins if present)
+        lam=plan.get("lambert") or {}
+        tof = lam.get("tof_days") or plan.get("tof_days")
+        dv_total = plan.get("dv_total_m_s")
+        self.hud.setText(f"{row['name']}  •  Δv={_round_sig(dv_total)} m/s  •  Depart {plan.get('departure_utc')} → Arrive {plan.get('arrival_utc')}"
+                         + ("  •  Lambert" if lam else ""))
         self.orbit.setPlan(plan); self.time.setValue(0)
 
 # ------------- Entry -------------
