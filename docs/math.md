@@ -91,34 +91,35 @@ $$
 
 $$
 \nu = 2\arctan\!\Big(\sqrt{\tfrac{1+e}{1-e}}\tan\tfrac{E}{2}\Big), \qquad
-p = a(1 - e^2)
+p = a(1-e^2)
 $$
 
 $$
-\begin{aligned}
-\mathbf{r}_{\mathrm{pf}} &=
+\mathbf{r}_{\mathrm{pf}} =
 \begin{bmatrix}
 \dfrac{p\cos\nu}{1+e\cos\nu}\\
 \dfrac{p\sin\nu}{1+e\cos\nu}\\
 0
-\end{bmatrix},
-\qquad
+\end{bmatrix}
+$$
+
+$$
 \mathbf{v}_{\mathrm{pf}} = \sqrt{\dfrac{\mu}{p}}\,
 \begin{bmatrix}
 -\sin\nu\\
 e+\cos\nu\\
 0
 \end{bmatrix}
-\end{aligned}
 $$
 
 **Rotate PQW→IJK (ecliptic)**
 
 $$
-\begin{aligned}
-\mathbf{r} &= R_3(\Omega)\,R_1(i)\,R_3(\omega)\,\mathbf{r}_{\mathrm{pf}},\\
-\mathbf{v} &= R_3(\Omega)\,R_1(i)\,R_3(\omega)\,\mathbf{v}_{\mathrm{pf}}
-\end{aligned}
+\mathbf{r} = R_3(\Omega)\,R_1(i)\,R_3(\omega)\,\mathbf{r}_{\mathrm{pf}}
+$$
+
+$$
+\mathbf{v} = R_3(\Omega)\,R_1(i)\,R_3(\omega)\,\mathbf{v}_{\mathrm{pf}}
 $$
 
 ---
@@ -216,21 +217,24 @@ This works for elliptic, parabolic (limit), and hyperbolic cases.
 
 ## 7. $\Delta v$ Accounting
 
-With Earth $\mathbf{v}_\oplus(t_1)$ and asteroid $\mathbf{v}_A(t_2)$:
+Let $\mathbf v_\oplus(t_1)$ be Earth’s heliocentric velocity at departure, and $\mathbf v_A(t_2)$ the asteroid’s at arrival.
 
 $$
-\begin{aligned}
-\Delta v_{\text{depart}} &= \left\lVert \mathbf{v}_1-\mathbf{v}_\oplus(t_1) \right\rVert,\\
-\Delta v_{\text{arrive}} &= \left\lVert \mathbf{v}_2-\mathbf{v}_A(t_2) \right\rVert
-\end{aligned}
+\Delta v_{\mathrm{depart}}
+= \sqrt{\,(\mathbf v_1 - \mathbf v_\oplus(t_1))\cdot(\mathbf v_1 - \mathbf v_\oplus(t_1))\,}
 $$
 
-Optionally expose launcher $C_3$ via $C_3 = v_\infty^2 = \Delta v_{\text{depart}}^2$.
+$$
+\Delta v_{\mathrm{arrive}}
+= \sqrt{\,(\mathbf v_2 - \mathbf v_A(t_2))\cdot(\mathbf v_2 - \mathbf v_A(t_2))\,}
+$$
+
+Optionally expose launcher $C_3$ via $C_3 = v_\infty^{2} = (\Delta v_{\mathrm{depart}})^{2}$.
 
 Total mission sizing (simple):
 
 $$
-\Delta v_{\text{mission}} \approx \Delta v_{\text{LEO}} + \Delta v_{\text{arrive}}
+\Delta v_{\mathrm{mission}} \approx \Delta v_{\mathrm{LEO}} + \Delta v_{\mathrm{arrive}}
 $$
 
 ---
