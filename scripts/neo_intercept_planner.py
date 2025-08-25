@@ -28,9 +28,13 @@ Notes:
 """
 
 from __future__ import annotations
-import argparse, json, math, os, sys
+import argparse
+import json
+import math
+import os
+import sys
 from datetime import datetime, timezone, timedelta
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple, List
 
 # --- Constants (SI) ---
 AU = 1.495978707e11           # m
@@ -47,8 +51,12 @@ RHO_ASTEROID = 2000.0         # kg/m^3 (2 g/cc)
 
 SCHEMA_VERSION = "1.1.0"
 
+
+# -------------------- Utilities --------------------
+
 def iso_z(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z")
+
 
 def parse_any_datetime(s: str) -> Optional[datetime]:
     """
@@ -61,7 +69,6 @@ def parse_any_datetime(s: str) -> Optional[datetime]:
     if not s:
         return None
     s = s.strip()
-    # Try a few common formats
     fmts = [
         "%Y-%b-%d %H:%M",      # "2025-Aug-24 17:55"
         "%Y-%m-%dT%H:%M:%SZ",  # ISO Z
@@ -80,12 +87,12 @@ def parse_any_datetime(s: str) -> Optional[datetime]:
             return dt
         except Exception:
             pass
-    # As a last resort, try fromisoformat (Python ≥3.11 handles 'Z')
     try:
-        dt = datetime.fromisoformat(s.replace("Z","+00:00"))
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
         return dt.astimezone(timezone.utc)
     except Exception:
         return None
+
 
 def hohmann_delta_v_and_tof(r1_m: float, r2_m: float, mu: float = MU_SUN) -> Tuple[float, float, float, float]:
     """
@@ -100,13 +107,14 @@ def hohmann_delta_v_and_tof(r1_m: float, r2_m: float, mu: float = MU_SUN) -> Tup
     v1 = math.sqrt(mu / r1_m)
     v2 = math.sqrt(mu / r2_m)
     a_t = 0.5 * (r1_m + r2_m)
-    v_p = math.sqrt(mu * (2.0 / r1_m - 1.0 / a_t))  # speed on transfer at perihelion r1
-    v_a = math.sqrt(mu * (2.0 / r2_m - 1.0 / a_t))  # speed on transfer at aphelion r2
+    v_p = math.sqrt(mu * (2.0 / r1_m - 1.0 / a_t))  # on transfer at perihelion (r1)
+    v_a = math.sqrt(mu * (2.0 / r2_m - 1.0 / a_t))  # on transfer at aphelion (r2)
     dv1 = abs(v_p - v1)
     dv2 = abs(v2 - v_a)
     tof = math.pi * math.sqrt(a_t ** 3 / mu)
-    v_inf = dv1  # in patched-conic approx, dv1 ≈ v_inf wrt Earth
+    v_inf = dv1  # patched-conic approx: dv1 ≈ v_inf wrt Earth
     return dv1, dv2, tof, v_inf
+
 
 def leo_escape_dv(v_inf: float, leo_alt_m: float = DEFAULT_LEO_ALT_M) -> float:
     """
@@ -117,6 +125,7 @@ def leo_escape_dv(v_inf: float, leo_alt_m: float = DEFAULT_LEO_ALT_M) -> float:
     v_circ = math.sqrt(MU_EARTH / r_park)
     v_esc = math.sqrt(2.0) * v_circ
     return math.sqrt(v_inf**2 + v_esc**2) - v_circ
+
 
 def synodic_period_days(r1_m: float, r2_m: float, mu: float = MU_SUN) -> float:
     """
@@ -130,6 +139,7 @@ def synodic_period_days(r1_m: float, r2_m: float, mu: float = MU_SUN) -> float:
     psyn = 2.0 * math.pi / abs(n1 - n2)  # seconds
     return psyn / 86400.0
 
+
 def roll_forward(arrival_utc: datetime, psyn_days: float, now_utc: datetime) -> Tuple[datetime, bool, int]:
     """
     If arrival_utc <= now_utc, add k * P_syn (in days) until it's future.
@@ -137,8 +147,7 @@ def roll_forward(arrival_utc: datetime, psyn_days: float, now_utc: datetime) -> 
     """
     if arrival_utc > now_utc:
         return arrival_utc, False, 0
-    if psyn_days > 1e8:  # guard
-        # If synodic is effectively infinite, just move arrival to tomorrow
+    if psyn_days > 1e8:  # guard for effectively-infinite synodic
         k = math.ceil((now_utc - arrival_utc).total_seconds() / 86400.0)
         return arrival_utc + timedelta(days=k), True, k
     delta_days = (now_utc - arrival_utc).total_seconds() / 86400.0
@@ -146,12 +155,78 @@ def roll_forward(arrival_utc: datetime, psyn_days: float, now_utc: datetime) -> 
     rolled = arrival_utc + timedelta(days=k * psyn_days)
     return rolled, True, k
 
+
+def flatten_neows(blob: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Accepts multiple snapshot shapes and returns a flat list of NEOs:
+      - {'potentially_hazardous_neos': [...]}
+      - {'neos': [...]}
+      - {'near_earth_objects': {'YYYY-MM-DD': [...]}}  # feed
+      - {'near_earth_objects': [...]}                  # browse
+      - the blob itself might already be a list
+    """
+    # Preferred pipeline keys
+    for k in ("potentially_hazardous_neos", "neos"):
+        v = blob.get(k)
+        if isinstance(v, list):
+            return v
+
+    neo = blob.get("near_earth_objects")
+    if isinstance(neo, list):
+        return neo
+    if isinstance(neo, dict):
+        flat: List[Dict[str, Any]] = []
+        for day_list in neo.values():
+            if isinstance(day_list, list):
+                flat.extend(day_list)
+        return flat
+
+    # Sometimes the file IS the list
+    if isinstance(blob, list):
+        return blob
+
+    # Loose fallbacks some feeds use
+    for k in ("data", "objects"):
+        v = blob.get(k)
+        if isinstance(v, list):
+            return v
+
+    raise SystemExit("Could not find NEO list in input JSON.")
+
+
+def get_estimated_diameter_m_bounds(neo: Dict[str, Any]) -> tuple[Optional[float], Optional[float]]:
+    """
+    Return (d_min_m, d_max_m) from either flattened fields or NeoWs nested units.
+    """
+    # Flattened (your prior shape)
+    dmin = neo.get("estimated_diameter_m_min")
+    dmax = neo.get("estimated_diameter_m_max")
+    if dmin is not None and dmax is not None:
+        try:
+            return float(dmin), float(dmax)
+        except Exception:
+            pass
+
+    # NeoWs nested shape
+    ed = neo.get("estimated_diameter")
+    if isinstance(ed, dict):
+        meters = ed.get("meters") or {}
+        dmin2 = meters.get("estimated_diameter_min")
+        dmax2 = meters.get("estimated_diameter_max")
+        try:
+            if dmin2 is not None and dmax2 is not None:
+                return float(dmin2), float(dmax2)
+        except Exception:
+            pass
+
+    return None, None
+
+
 def pick_target_r2_au(neo: Dict[str, Any], default_r2_au: float) -> float:
     """
     Try to infer a plausible r2 (AU). If snapshot includes orbital data with 'semi_major_axis', use it.
     Else fallback to default_r2_au.
     """
-    # Try common locations the feed might use
     for key in ("orbital_data", "orbit", "elements"):
         d = neo.get(key)
         if isinstance(d, dict):
@@ -163,22 +238,25 @@ def pick_target_r2_au(neo: Dict[str, Any], default_r2_au: float) -> float:
                 pass
     return float(default_r2_au)
 
+
 def estimate_asteroid_mass_and_mu(neo: Dict[str, Any]) -> Tuple[Optional[float], Optional[float], Optional[float]]:
     """
     Estimate radius (m), mass (kg), and mu=G*M (m^3/s^2) from diameter bounds and density.
     Returns (R, M, mu) or (None, None, None) if insufficient data.
     """
-    d = neo.get("estimated_diameter_m_min"), neo.get("estimated_diameter_m_max")
-    if d[0] is None or d[1] is None:
+    dmin, dmax = get_estimated_diameter_m_bounds(neo)
+    if dmin is None or dmax is None:
         return None, None, None
-    d_mean = 0.5 * (float(d[0]) + float(d[1]))  # meters
+    d_mean = 0.5 * (float(dmin) + float(dmax))  # meters
     r = 0.5 * d_mean
-    volume = (4.0/3.0) * math.pi * r**3
+    volume = (4.0 / 3.0) * math.pi * r**3
     M = RHO_ASTEROID * volume
-    # G:
     G = 6.67430e-11
     mu = G * M
     return r, M, mu
+
+
+# -------------------- Core Planning --------------------
 
 def plan_for_neo(
     neo: Dict[str, Any],
@@ -205,13 +283,10 @@ def plan_for_neo(
     if arrival_override:
         arrival_dt = arrival_override
     else:
-        # Check a few likely spots for a date string
-        # 1) neo['close_approach']['date_full']
         ca = neo.get("close_approach") or neo.get("close_approach_data")
         if isinstance(ca, dict):
             arrival_dt = parse_any_datetime(ca.get("date_full") or ca.get("close_approach_date_full") or ca.get("date"))
         elif isinstance(ca, list) and ca:
-            # take the soonest Earth approach entry if available
             earth_first = None
             for entry in ca:
                 if entry.get("orbiting_body") == "Earth":
@@ -237,12 +312,11 @@ def plan_for_neo(
 
     # Simple on-asteroid orbit heuristic
     R_ast, M_ast, mu_ast = estimate_asteroid_mass_and_mu(neo)
-    suggested_orbit = None
-    if R_ast is not None and mu_ast is not None:
+    if R_ast is not None and mu_ast is not None and mu_ast > 0:
         alt = max(3.0 * R_ast, 1000.0)  # meters
         r_orb = R_ast + alt
-        v_circ = math.sqrt(mu_ast / r_orb) if mu_ast > 0 else None
-        T = (2.0 * math.pi * r_orb / v_circ) if v_circ and v_circ > 0 else None
+        v_circ = math.sqrt(mu_ast / r_orb)
+        T = (2.0 * math.pi * r_orb / v_circ) if v_circ > 0 else None
         suggested_orbit = {
             "radius_m": r_orb,
             "altitude_m": alt,
@@ -294,23 +368,30 @@ def plan_for_neo(
     }
     return plan
 
+
+# -------------------- IO & CLI --------------------
+
 def load_json(path: str) -> Dict[str, Any]:
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
+
 
 def write_json(obj: Dict[str, Any], path: str) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(obj, f, indent=2, sort_keys=False)
 
+
 def derive_default_output(in_path: str) -> str:
     d, base = os.path.split(in_path)
-    name, ext = os.path.splitext(base)
+    name, _ = os.path.splitext(base)
     out_name = f"{name}_intercept.json"
     return os.path.join(d, out_name)
 
+
 def build_profile(name: str, m0_kg: float, isp_s: float) -> Dict[str, Any]:
     return {"name": name, "m0_kg": float(m0_kg), "Isp_s": float(isp_s)}
+
 
 def main():
     parser = argparse.ArgumentParser(description="Compute simple intercept plans for hazardous NEOs.")
@@ -341,20 +422,13 @@ def main():
     arrival_override = parse_any_datetime(args.arrive_utc) if args.arrive_utc else None
 
     data = load_json(in_path)
+    try:
+        neos = flatten_neows(data)
+    except SystemExit as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        sys.exit(2)
 
-    # Accept either a compact list or the prior "potentially_hazardous_neos" shape
-    neos = None
-    if isinstance(data, dict):
-        neos = data.get("potentially_hazardous_neos") or data.get("neos") or data.get("data") or data.get("objects")
-    if neos is None:
-        # Maybe the file IS the list
-        if isinstance(data, list):
-            neos = data
-        else:
-            print("ERROR: Could not find NEO list in input JSON.", file=sys.stderr)
-            sys.exit(2)
-
-    plans = []
+    plans: List[Dict[str, Any]] = []
     for neo in neos:
         try:
             plan = plan_for_neo(
@@ -367,19 +441,17 @@ def main():
                 roll_past=args.roll_past,
                 now_utc=now_utc
             )
-            # Attach non-destructively
             neo_out = dict(neo)
             neo_out["intercept_plan"] = plan
             plans.append(neo_out)
         except Exception as e:
-            # Be forgiving; record failure for this NEO
             plans.append({
                 "name": neo.get("name"),
-                "neo_reference_id": neo.get("neo_reference_id"),
+                "neo_reference_id": neo.get("neo_reference_id") or neo.get("id"),
                 "error": f"{type(e).__name__}: {e}"
             })
 
-    out_obj = {
+    out_obj: Dict[str, Any] = {
         "date_utc": now_utc.date().isoformat(),
         "snapshot_utc": iso_z(now_utc),
         "count": len(plans),
@@ -396,6 +468,7 @@ def main():
     }
     write_json(out_obj, out_path)
     print(f"Wrote intercept plans → {out_path}")
+
 
 if __name__ == "__main__":
     main()
