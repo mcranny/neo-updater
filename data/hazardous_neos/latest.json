@@ -1,1 +1,6 @@
-{"potentially_hazardous_neos":[{"name":"(Test NEO)","absolute_magnitude_h":22.0,"estimated_diameter_m_min":120,"estimated_diameter_m_max":240,"orbital_data":{"semi_major_axis":1.4},"close_approach":{"date_full":"2026-Jan-05 00:00"}}]}
+{
+  "potentially_hazardous_neos": [],
+  "date_utc": "2025-08-25",
+  "snapshot_utc": "2025-08-25T04:32:58Z",
+  "count": 0
+}
