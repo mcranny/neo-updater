@@ -1,7 +1,7 @@
 {
   "date_utc": "2025-08-25",
-  "snapshot_utc": "2025-08-25T00:01:28.922707Z",
-  "count": 1,
+  "snapshot_utc": "2025-08-25T02:40:08.316015Z",
+  "count": 0,
   "schema": {
     "version": "1.1.0",
     "source": "neo_intercept_planner.py",
@@ -11,48 +11,5 @@
       "leo_alt_km": 500.0
     }
   },
-  "potentially_hazardous_neos": [
-    {
-      "name": "(2023 OQ)",
-      "neo_reference_id": "54375474",
-      "absolute_magnitude_h": 21.85,
-      "estimated_diameter_m_min": 113.3848360975,
-      "estimated_diameter_m_max": 253.5362011316,
-      "close_approach": {
-        "date_full": "2025-Aug-24 17:55",
-        "orbiting_body": "Earth",
-        "miss_distance_km": 36661352.94084104,
-        "relative_velocity_km_s": 13.9396974019
-      },
-      "intercept_plan": {
-        "schema_version": "1.1.0",
-        "profile": "neosurveyor",
-        "r1_AU": 1.0,
-        "r2_AU": 1.0,
-        "tof_days": 182.62844917963588,
-        "synodic_days": 1000000000.0,
-        "arrival_utc": "2025-08-26T00:00:00Z",
-        "departure_utc": "2025-02-24T08:55:01.990879Z",
-        "rolled_forward": true,
-        "roll_periods_added": 2064,
-        "dv_depart_heliocentric_m_s": 0.0,
-        "dv_arrive_heliocentric_m_s": 0.0,
-        "v_inf_m_s": 0.0,
-        "dv_from_LEO_m_s": 3153.245550381598,
-        "dv_total_m_s": 3153.245550381598,
-        "leo_altitude_m": 500000.0,
-        "spacecraft_mass_kg": 1300.0,
-        "Isp_s": 230.0,
-        "propellant_estimate_kg": 978.7843334451009,
-        "suggested_orbit": {
-          "radius_m": 1091.730259307275,
-          "altitude_m": 1000.0,
-          "circular_speed_m_s": 0.019882611299128734,
-          "period_s": 345002.1439076978,
-          "note": "alt >= max(3R, 1 km); density 2 g/cc assumed"
-        },
-        "notes": "Circular/coplanar Hohmann; Earth SOI patched-conic; arrival date rolled if in past and --roll-past set."
-      }
-    }
-  ]
+  "potentially_hazardous_neos": []
 }
