@@ -133,11 +133,19 @@ Solve universal-variables **Lambert** (prograde, single-rev) to get $\mathbf{v}_
 Report:
 
 $$
-\Delta v_{\mathrm{depart}}=\left\|\mathbf{v}_1-\mathbf{v}_\oplus(t_1)\right\|,\quad
-\Delta v_{\mathrm{arrive}}=\left\|\mathbf{v}_2-\mathbf{v}_A(t_2)\right\|
+\Delta v_{\mathrm{depart}} =
+\sqrt{\left( v_1 - v_\oplus(t_1) \right)\cdot
+      \left( v_1 - v_\oplus(t_1) \right)}
 $$
 
-Optionally expose $C_3=v_\infty^2$ (future).
+$$
+\Delta v_{\mathrm{arrive}} =
+\sqrt{\left( v_2 - v_A(t_2) \right)\cdot
+      \left( v_2 - v_A(t_2) \right)}
+$$
+
+
+Optionally expose $C_3 = v_\infty^2$ (future).
 
 The viewer draws the Lambert polyline (XY in AU); the SC rides the arc and intercepts at arrival.
 
