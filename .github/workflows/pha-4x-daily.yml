@@ -2,7 +2,7 @@ name: Hazardous NEOs 4x Daily
 
 on:
   schedule:
-    - cron: "0 0,6,12,18 * * *" # 00:00, 06:00, 12:00, 18:00 UTC
+    - cron: "0 0,6,12,18 * * *"  # 4x daily (UTC)
   workflow_dispatch:
 
 concurrency:
@@ -24,29 +24,31 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.x"
+          python-version: "3.11"
           cache: "pip"
+          cache-dependency-path: requirements.txt
 
-      - name: Install dependencies (if any)
+      - name: Install dependencies
         run: |
-          if [ -f requirements.txt ]; then
-            python -m pip install --upgrade pip
-            python -m pip install -r requirements.txt
-          fi
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
-      - name: Run updater
+      - name: Sanity check
+        run: |
+          python -c "import requests, dateutil, dotenv; print('Deps OK')"
+
+      - name: Run updater (NeoWs → latest.json)
         env:
           NASA_API_KEY: ${{ secrets.NASA_API_KEY }}
           OUT_FILE: data/hazardous_neos/latest.json
-        run: python -m scripts.update_hazardous_neos
+        run: |
+          python -m scripts.update_hazardous_neos
 
-      - name: Plan intercepts
+      - name: Plan intercepts (→ latest_intercept.json)
         env:
           OUT_FILE: data/hazardous_neos/latest.json
         run: |
-          python -m scripts.neo_intercept_planner \
-            --output data/hazardous_neos/latest_intercept.json \
-            --roll-past
+          python -m scripts.neo_intercept_planner --output data/hazardous_neos/latest_intercept.json --roll-past
 
       - name: Commit & push if changed
         env:
@@ -55,11 +57,11 @@ jobs:
           GIT_COMMITTER_NAME: "Matthew Cranny"
           GIT_COMMITTER_EMAIL: "163694578+mcranny@users.noreply.github.com"
         run: |
-          git config user.name "${GIT_COMMITTER_NAME}"
-          git config user.email "${GIT_COMMITTER_EMAIL}"
           if [[ -n "$(git status --porcelain)" ]]; then
+            git config user.name  "${GIT_COMMITTER_NAME}"
+            git config user.email "${GIT_COMMITTER_EMAIL}"
             git add -A
-            git commit -m "Update hazardous NEO snapshot & intercepts (roll-past): $(date -u +%F)"
+            git commit -m "CI: update hazardous NEO snapshot & intercepts $(date -u +'%Y-%m-%d %H:%MZ')"
             git push
           else
             echo "No changes to commit."
