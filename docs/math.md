@@ -1,7 +1,5 @@
 # Math & Methods
 
-This document expands the math behind the planner and viewer. Formulas are written using GitHub’s LaTeX support: inline with `$…$`, display with `$$…$$`.
-
 ---
 
 ## 1. Units, Frames, Conventions
