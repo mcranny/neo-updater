@@ -1,12 +1,14 @@
 # Math & Methods
 
+This document expands the math behind the planner and viewer. Formulas are written using GitHub’s LaTeX support: inline with `$…$`, display with `$$…$$`.
+
 ---
 
 ## 1. Units, Frames, Conventions
 
 - **Canonical solar units** for reasoning: AU, year, with $\mu_\odot = 4\pi^2$. Then $P^2=a^3$ and $n=\dfrac{2\pi}{a^{3/2}}$.
 - **SI** for $\Delta v$ and LEO injection reporting.
-- States are heliocentric in the ecliptic frame; the viewer projects to **XY**.
+- States are heliocentric in the the ecliptic frame; the viewer projects to **XY**.
 
 Angles are in radians internally; JSON stores degrees where indicated.
 
@@ -96,27 +98,30 @@ p=a(1-e^2).
 $$
 
 $$
-\mathbf{r}_{\text{pf}}=
+\begin{aligned}
+\mathbf{r}_{\text{pf}} &=
 \begin{bmatrix}
 \dfrac{p\cos\nu}{1+e\cos\nu}\\[6pt]
 \dfrac{p\sin\nu}{1+e\cos\nu}\\[2pt]
 0
 \end{bmatrix},
 \qquad
-\mathbf{v}_{\text{pf}}=\sqrt{\frac{\mu}{p}}
+\mathbf{v}_{\text{pf}} &= \sqrt{\frac{\mu}{p}}
 \begin{bmatrix}
 -\sin\nu\\[2pt]
 e+\cos\nu\\[2pt]
 0
 \end{bmatrix}.
+\end{aligned}
 $$
 
 **Rotate PQW→IJK (ecliptic)**
 
 $$
-\mathbf{r}=\mathbf{R}_3(\Omega)\,\mathbf{R}_1(i)\,\mathbf{R}_3(\omega)\,\mathbf{r}_{\text{pf}},
-\qquad
-\mathbf{v}=\mathbf{R}_3(\Omega)\,\mathbf{R}_1(i)\,\mathbf{R}_3(\omega)\,\mathbf{v}_{\text{pf}}.
+\begin{aligned}
+\mathbf{r}&=\mathbf{R}_3(\Omega)\,\mathbf{R}_1(i)\,\mathbf{R}_3(\omega)\,\mathbf{r}_{\text{pf}},\\
+\mathbf{v}&=\mathbf{R}_3(\Omega)\,\mathbf{R}_1(i)\,\mathbf{R}_3(\omega)\,\mathbf{v}_{\text{pf}}.
+\end{aligned}
 $$
 
 ---
@@ -137,15 +142,15 @@ Stumpff functions:
 $$
 C(z)=
 \begin{cases}
-\dfrac{1-\cos\sqrt{z}}{z}, & z>0\\[6pt]
-\dfrac{1}{2}, & z=0\\[6pt]
+\dfrac{1-\cos\sqrt{z}}{z}, & z>0,\\[6pt]
+\dfrac{1}{2}, & z=0,\\[6pt]
 \dfrac{\cosh\sqrt{-z}-1}{-z}, & z<0
 \end{cases}
-\quad
+\qquad
 S(z)=
 \begin{cases}
-\dfrac{\sqrt{z}-\sin\sqrt{z}}{z^{3/2}}, & z>0\\[6pt]
-\dfrac{1}{6}, & z=0\\[6pt]
+\dfrac{\sqrt{z}-\sin\sqrt{z}}{z^{3/2}}, & z>0,\\[6pt]
+\dfrac{1}{6}, & z=0,\\[6pt]
 \dfrac{\sinh\sqrt{-z}-\sqrt{-z}}{(-z)^{3/2}}, & z<0
 \end{cases}.
 $$
@@ -217,9 +222,10 @@ This works for elliptic, parabolic (limit), and hyperbolic cases.
 With Earth $\mathbf{v}_\oplus(t_1)$ and asteroid $\mathbf{v}_A(t_2)$:
 
 $$
-\Delta v_{\text{depart}}=\bigl\|\mathbf{v}_1-\mathbf{v}_\oplus(t_1)\bigr\|,
-\qquad
-\Delta v_{\text{arrive}}=\bigl\|\mathbf{v}_2-\mathbf{v}_A(t_2)\bigr\|.
+\begin{aligned}
+\Delta v_{\text{depart}} &= \bigl\|\mathbf{v}_1-\mathbf{v}_\oplus(t_1)\bigr\|,\\
+\Delta v_{\text{arrive}} &= \bigl\|\mathbf{v}_2-\mathbf{v}_A(t_2)\bigr\|.
+\end{aligned}
 $$
 
 Optionally expose launcher $C_3$ via $C_3=v_\infty^2=\Delta v_{\text{depart}}^2$.
@@ -261,7 +267,7 @@ For inclination differences $\Delta i$:
 
 ## 11. References
 
-- Prussing & Conway, *Orbital Mechanics*.  
-- Battin, *An Introduction to the Mathematics and Methods of Astrodynamics*.  
-- Vallado, *Fundamentals of Astrodynamics and Applications*.  
+- Prussing & Conway, *Orbital Mechanics*.
+- Battin, *An Introduction to the Mathematics and Methods of Astrodynamics*.
+- Vallado, *Fundamentals of Astrodynamics and Applications*.
 - Izzo, “Revisiting Lambert’s Problem”.
