@@ -156,7 +156,7 @@ $$
 Define
 
 $$
-y(z)=r_1+r_2 + A\,\frac{z\,S(z)-1}{\sqrt{C(z)}}
+y(z) = r_1 + r_2 + A \cdot \frac{z S(z) - 1}{C(z)}
 $$
 
 and solve the scalar equation
