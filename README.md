@@ -6,9 +6,6 @@ A small pipeline that:
 - Writes a daily snapshot to `data/hazardous_neos/latest.json`.
 - Plans a **Hohmann**-style Earth→NEO transfer for each object and writes `latest_intercept.json`.
 - Includes a **Qt viewer** that animates Earth, target, and transfer with intercept/closest-approach detection.
-- Runs **4×/day on GitHub Actions** and can be run locally.
-
-**Repo:** `mcranny/neo-updater` ─ **Branch:** `main`
 
 ---
 
