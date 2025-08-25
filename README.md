@@ -124,18 +124,18 @@ Outward example:
 
 $$\theta_T(0)=\pi - n_2 \cdot \mathrm{TOF}\pmod{2\pi}$$
 
-### Lambert rendezvous (opt-in)
-- Propagate Earth $\mathbf{r}_\oplus(t_1)$ and NEO $\mathbf{r}_A(t_2)$ from elements.
-- Solve universal-variables **Lambert** (prograde, single-rev) to get $\mathbf{v}_1,\ \mathbf{v}_2$.
-- Report:
+## Lambert rendezvous (opt-in)
 
-  $$
-  \Delta v_{\mathrm{depart}}
-    = \sqrt{ \big( \mathbf{v}_{1} - \mathbf{v}_{\oplus}(t_{1}) \big) \cdot \big( \mathbf{v}_{1} - \mathbf{v}_{\oplus}(t_{1}) \big) }, 
-  \quad
-  \Delta v_{\mathrm{arrive}}
-    = \sqrt{ \big( \mathbf{v}_{2} - \mathbf{v}_{A}(t_{2}) \big) \cdot \big( \mathbf{v}_{2} - \mathbf{v}_{A}(t_{2}) \big) }.
-  $$
+Propagate Earth $\mathbf{r}_\oplus(t_1)$ and NEO $\mathbf{r}_A(t_2)$ from elements.
+
+Solve universal-variables **Lambert** (prograde, single-rev) to get $\mathbf{v}_1,\ \mathbf{v}_2$.
+
+Report:
+
+$$
+\Delta v_{\mathrm{depart}}=\left\|\mathbf{v}_1-\mathbf{v}_\oplus(t_1)\right\|,\quad
+\Delta v_{\mathrm{arrive}}=\left\|\mathbf{v}_2-\mathbf{v}_A(t_2)\right\|
+$$
 
 Optionally expose $C_3=v_\infty^2$ (future).
 
