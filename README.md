@@ -55,21 +55,7 @@ python app/neo_viewer_qt.py
 
 ---
 
-## GitHub Actions (CI)
-
-Workflow: `.github/workflows/pha-4x-daily.yml`  
-Triggers: `0 0,6,12,18 * * *` **UTC** (≈ **17:00, 23:00, 05:00, 11:00** US‑Pacific).
-
-Setup:
-1. Add repo **Secret** `NASA_API_KEY`.
-2. Ensure workflow has `contents: write` permissions.
-3. (Optional) Set author to your **noreply** email so commits count on your graph.
-
-The job runs updater → planner, and commits changes if any.
-
----
-
-## Minimal Math Overview (What the Viewer Shows)
+## Minimal Math Overview
 
 We use a **coplanar, circular** Sun‑centered model in **canonical solar units**:
 
@@ -116,14 +102,6 @@ Per NEO (subset):
   \"rolled_forward\": true|false
 }
 ```
-
----
-
-## Troubleshooting
-
-- **`ModuleNotFoundError: PySide6`** → activate venv, `pip install -r requirements.txt`.
-- **macOS PEP 668** → always use a venv; avoid Homebrew’s system Python for `pip` installs.
-- **Qt crash on reload** → already handled by recreating scene items (just upgrade to this version).
 
 ---
 
