@@ -217,7 +217,8 @@ This works for elliptic, parabolic (limit), and hyperbolic cases.
 With Earth $\mathbf{v}_\oplus(t_1)$ and asteroid $\mathbf{v}_A(t_2)$:
 
 $$
-\Delta v_{\text{depart}}=\bigl\|\mathbf{v}_1-\mathbf{v}_\oplus(t_1)\bigr\|,\qquad
+\Delta v_{\text{depart}}=\bigl\|\mathbf{v}_1-\mathbf{v}_\oplus(t_1)\bigr\|,
+\qquad
 \Delta v_{\text{arrive}}=\bigl\|\mathbf{v}_2-\mathbf{v}_A(t_2)\bigr\|.
 $$
 
