@@ -15,10 +15,10 @@ For full derivations and algorithms, see **[docs/math.md](docs/math.md)**.
 ## Architecture
 
     NeoWs (daily) ─┬─▶ data/hazardous_neos/latest.json
-                    │
-                    ├─▶ Hohmann (default CI) ─▶ latest_intercept.json
-                    │
-                    └─▶ +SBDB +Lambert (opt-in) ─▶ latest_intercept.json (adds lambert/*)
+                   │
+                   ├─▶ Hohmann (default CI) ─▶ latest_intercept.json
+                   │
+                   └─▶ +SBDB +Lambert (opt-in) ─▶ latest_intercept.json (adds lambert/*)
 
 - **Updater** — `scripts/update_hazardous_neos.py`  
   Uses `NASA_API_KEY` (single-day window; `count=0` is normal).
@@ -95,42 +95,49 @@ python app/neo_viewer_qt.py data/hazardous_neos/latest_intercept.json
 ## Math (essentials)
 
 ### Units & frame
-- Canonical solar units for reasoning: AU, year, with \( \mu_\odot = 4\pi^2 \).  
-  Then \( P^2 = a^3 \), \( n = 2\pi/a^{3/2} \).
-- SI for Δv and LEO injection. Viewer draws the ecliptic-plane XY projection.
+- Canonical solar units for reasoning: AU, year, with $\mu_\odot = 4\pi^2$. Then $P^2 = a^3$, $n = 2\pi/a^{3/2}$.
+- SI for $\Delta v$ and LEO injection. Viewer draws the ecliptic-plane XY projection.
 
 ### Hohmann (circular→circular, coplanar)
-Given heliocentric radii \( r_1, r_2 \) (AU), transfer ellipse:
-$$
-a_t=\tfrac{1}{2}(r_1+r_2),\quad
-b_t=\sqrt{r_1 r_2},\quad
-e_t=\sqrt{1-(b_t/a_t)^2}
-$$
+Given heliocentric radii $r_1, r_2$ (AU), transfer ellipse:
+
+$$a_t=\tfrac{1}{2}(r_1+r_2),\quad b_t=\sqrt{r_1 r_2},\quad e_t=\sqrt{1-(b_t/a_t)^2}$$
+
 Speeds:
-$$
-v_1=\sqrt{\mu/r_1},\quad
-v_2=\sqrt{\mu/r_2},\quad
-v_p=\sqrt{\mu(2/r_1-1/a_t)},\quad
-v_a=\sqrt{\mu(2/r_2-1/a_t)}
-$$
-Δv (Sun-centric): \( \Delta v_1=|v_p-v_1| \), \( \Delta v_2=|v_2-v_a| \).  
-Time of flight: \( \mathrm{TOF}=\pi\sqrt{a_t^3/\mu} \).
 
-**LEO escape (patched conic)** with LEO radius \( r_L \), \( v_L=\sqrt{\mu_\oplus/r_L} \):
-$$
-\Delta v_{\text{LEO}}=\sqrt{v_\infty^2+( \sqrt{2}\,v_L )^2}-v_L,\qquad v_\infty \approx \Delta v_1
-$$
+$$v_1=\sqrt{\mu/r_1},\quad v_2=\sqrt{\mu/r_2},\quad v_p=\sqrt{\mu(2/r_1-1/a_t)},\quad v_a=\sqrt{\mu(2/r_2-1/a_t)}$$
 
-**Phasing (viewer legacy)**: pick target start angle so it reaches the end of the half-ellipse at \( t=\mathrm{TOF} \).  
-Outward example: \( \theta_T(0)=\pi - n_2 \cdot \mathrm{TOF} \) (mod \(2\pi\)).
+Δv (Sun-centric):  
+
+$$\Delta v_1=\lvert v_p-v_1\rvert,\quad \Delta v_2=\lvert v_2-v_a\rvert$$  
+
+Time of flight:  
+
+$$\mathrm{TOF}=\pi\sqrt{a_t^3/\mu}$$
+
+**LEO escape (patched conic)** with LEO radius $r_L$, $v_L=\sqrt{\mu_\oplus/r_L}$:
+
+$$\Delta v_{\text{LEO}}=\sqrt{v_\infty^2+(\sqrt{2}\,v_L)^2}-v_L,\qquad v_\infty \approx \Delta v_1$$
+
+**Phasing (viewer legacy):** pick target start angle so it reaches the end of the half-ellipse at $t=\mathrm{TOF}$.
+Outward example:  
+
+$$\theta_T(0)=\pi - n_2 \cdot \mathrm{TOF}\pmod{2\pi}$$
 
 ### Lambert rendezvous (opt-in)
-- Propagate Earth \( \mathbf{r}_\oplus(t_1) \) and NEO \( \mathbf{r}_A(t_2) \) from elements.
-- Solve universal-variables **Lambert** (prograde, single-rev) to get \( \mathbf{v}_1, \mathbf{v}_2 \).
+- Propagate Earth $\mathbf{r}_\oplus(t_1)$ and NEO $\mathbf{r}_A(t_2)$ from elements.
+- Solve universal-variables **Lambert** (prograde, single-rev) to get $\mathbf{v}_1,\ \mathbf{v}_2$.
 - Report:
-  \( \Delta v_{\text{depart}}=\|\mathbf{v}_1-\mathbf{v}_\oplus(t_1)\| \),  
-  \( \Delta v_{\text{arrive}}=\|\mathbf{v}_2-\mathbf{v}_A(t_2)\| \).  
-  Optionally expose \( C_3=v_\infty^2 \) (future).
+
+  $$
+  \Delta v_{\mathrm{depart}}
+    = \sqrt{ \big( \mathbf{v}_{1} - \mathbf{v}_{\oplus}(t_{1}) \big) \cdot \big( \mathbf{v}_{1} - \mathbf{v}_{\oplus}(t_{1}) \big) }, 
+  \quad
+  \Delta v_{\mathrm{arrive}}
+    = \sqrt{ \big( \mathbf{v}_{2} - \mathbf{v}_{A}(t_{2}) \big) \cdot \big( \mathbf{v}_{2} - \mathbf{v}_{A}(t_{2}) \big) }.
+  $$
+
+Optionally expose $C_3=v_\infty^2$ (future).
 
 The viewer draws the Lambert polyline (XY in AU); the SC rides the arc and intercepts at arrival.
 
