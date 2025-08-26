@@ -1,10 +1,13 @@
-# Python cache
+# env/editor
+.venv/
+.env
+.vscode/
+.DS_Store
+
+# python build noise
 __pycache__/
 *.pyc
+*.pyo
 
-# Local environment files
-.env
-.env.local
-
-# macOS metadata
-.DS_Store
+# local artifacts / backups
+app/viewer3d.backup.py

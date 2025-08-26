@@ -1,11 +1,17 @@
- requests
- python-dateutil
- python-dotenv
-numpy>=2.3
- # Viewer (local only)
- PySide6>=6.8; platform_system!="Linux"
- # Dev/test
- pytest
- jsonschema
- ruff
- black
+# Core/runtime
+numpy>=2.0
+requests>=2.31
+python-dateutil>=2.9
+python-dotenv>=1.0
+
+# Viewer (install locally; skip on Linux/CI)
+PySide6>=6.8; platform_system!="Linux"
+pyqtgraph>=0.13.7; platform_system!="Linux"
+PyOpenGL>=3.1.7; platform_system!="Linux"
+PyOpenGL-accelerate>=3.1.7; platform_system!="Linux"
+
+# Dev/test (optional)
+pytest>=8
+jsonschema>=4.21
+ruff>=0.5
+black>=24.8
