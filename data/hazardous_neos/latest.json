@@ -1,20 +1,6 @@
 {
-  "potentially_hazardous_neos": [
-    {
-      "name": "(2014 PS59)",
-      "neo_reference_id": "3681964",
-      "absolute_magnitude_h": 20.52,
-      "estimated_diameter_m_min": 209.196770901,
-      "estimated_diameter_m_max": 467.778200408,
-      "close_approach": {
-        "date_full": "2025-Aug-27 04:31",
-        "orbiting_body": "Earth",
-        "miss_distance_km": 9462535.119530309,
-        "relative_velocity_km_s": 14.9254230562
-      }
-    }
-  ],
-  "date_utc": "2025-08-27",
-  "snapshot_utc": "2025-08-27T18:13:39Z",
-  "count": 1
+  "potentially_hazardous_neos": [],
+  "date_utc": "2025-08-28",
+  "snapshot_utc": "2025-08-28T00:44:55Z",
+  "count": 0
 }
