@@ -1,6 +1,20 @@
 {
-  "potentially_hazardous_neos": [],
-  "date_utc": "2025-08-29",
-  "snapshot_utc": "2025-08-29T18:13:12Z",
-  "count": 0
+  "potentially_hazardous_neos": [
+    {
+      "name": "(1998 SH2)",
+      "neo_reference_id": "3014109",
+      "absolute_magnitude_h": 20.8,
+      "estimated_diameter_m_min": 183.8886720703,
+      "estimated_diameter_m_max": 411.1875710413,
+      "close_approach": {
+        "date_full": "2025-Aug-30 13:25",
+        "orbiting_body": "Earth",
+        "miss_distance_km": 3108351.768437121,
+        "relative_velocity_km_s": 17.3005661005
+      }
+    }
+  ],
+  "date_utc": "2025-08-30",
+  "snapshot_utc": "2025-08-30T00:42:34Z",
+  "count": 1
 }
