@@ -1,6 +1,20 @@
 {
-  "potentially_hazardous_neos": [],
-  "date_utc": "2025-08-31",
-  "snapshot_utc": "2025-08-31T18:11:53Z",
-  "count": 0
+  "potentially_hazardous_neos": [
+    {
+      "name": "(2024 NO5)",
+      "neo_reference_id": "54465556",
+      "absolute_magnitude_h": 20.81,
+      "estimated_diameter_m_min": 183.0437803683,
+      "estimated_diameter_m_max": 409.2983357621,
+      "close_approach": {
+        "date_full": "2025-Sep-01 16:32",
+        "orbiting_body": "Earth",
+        "miss_distance_km": 15348904.37408043,
+        "relative_velocity_km_s": 10.1457622308
+      }
+    }
+  ],
+  "date_utc": "2025-09-01",
+  "snapshot_utc": "2025-09-01T00:55:53Z",
+  "count": 1
 }
