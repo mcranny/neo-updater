@@ -9,12 +9,12 @@
       "close_approach": {
         "date_full": "2025-Sep-01 16:32",
         "orbiting_body": "Earth",
-        "miss_distance_km": 15348904.37408043,
-        "relative_velocity_km_s": 10.1457622308
+        "miss_distance_km": 15348904.299281495,
+        "relative_velocity_km_s": 10.1457624763
       }
     }
   ],
   "date_utc": "2025-09-01",
-  "snapshot_utc": "2025-09-01T06:16:55Z",
+  "snapshot_utc": "2025-09-01T12:18:56Z",
   "count": 1
 }
