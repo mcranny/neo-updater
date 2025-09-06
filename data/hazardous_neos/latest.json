@@ -1,33 +1,6 @@
 {
-  "potentially_hazardous_neos": [
-    {
-      "name": "(2020 KO3)",
-      "neo_reference_id": "54017196",
-      "absolute_magnitude_h": 20.19,
-      "estimated_diameter_m_min": 243.5314062744,
-      "estimated_diameter_m_max": 544.5527790857,
-      "close_approach": {
-        "date_full": "2025-Sep-05 17:48",
-        "orbiting_body": "Earth",
-        "miss_distance_km": 23663222.105805837,
-        "relative_velocity_km_s": 10.4404750266
-      }
-    },
-    {
-      "name": "826387 (2020 KO3)",
-      "neo_reference_id": "2826387",
-      "absolute_magnitude_h": 20.19,
-      "estimated_diameter_m_min": 243.5314062744,
-      "estimated_diameter_m_max": 544.5527790857,
-      "close_approach": {
-        "date_full": "2025-Sep-05 17:48",
-        "orbiting_body": "Earth",
-        "miss_distance_km": 23663222.105805837,
-        "relative_velocity_km_s": 10.4404750069
-      }
-    }
-  ],
-  "date_utc": "2025-09-05",
-  "snapshot_utc": "2025-09-05T18:13:20Z",
-  "count": 2
+  "potentially_hazardous_neos": [],
+  "date_utc": "2025-09-06",
+  "snapshot_utc": "2025-09-06T00:42:41Z",
+  "count": 0
 }
