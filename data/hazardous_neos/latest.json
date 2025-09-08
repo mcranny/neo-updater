@@ -1,20 +1,20 @@
 {
   "potentially_hazardous_neos": [
     {
-      "name": "(2017 QY34)",
-      "neo_reference_id": "3781301",
-      "absolute_magnitude_h": 20.93,
-      "estimated_diameter_m_min": 173.2028271414,
-      "estimated_diameter_m_max": 387.2932953833,
+      "name": "(2000 QV7)",
+      "neo_reference_id": "3046125",
+      "absolute_magnitude_h": 21.55,
+      "estimated_diameter_m_min": 130.1832101881,
+      "estimated_diameter_m_max": 291.0985075098,
       "close_approach": {
-        "date_full": "2025-Sep-07 05:21",
+        "date_full": "2025-Sep-08 06:25",
         "orbiting_body": "Earth",
-        "miss_distance_km": 61579875.35274692,
-        "relative_velocity_km_s": 27.5457116905
+        "miss_distance_km": 68214230.50158624,
+        "relative_velocity_km_s": 29.646846908
       }
     }
   ],
-  "date_utc": "2025-09-07",
-  "snapshot_utc": "2025-09-07T18:11:38Z",
+  "date_utc": "2025-09-08",
+  "snapshot_utc": "2025-09-08T00:47:22Z",
   "count": 1
 }
