@@ -1,20 +1,6 @@
 {
-  "potentially_hazardous_neos": [
-    {
-      "name": "(2000 QV7)",
-      "neo_reference_id": "3046125",
-      "absolute_magnitude_h": 21.55,
-      "estimated_diameter_m_min": 130.1832101881,
-      "estimated_diameter_m_max": 291.0985075098,
-      "close_approach": {
-        "date_full": "2025-Sep-08 06:25",
-        "orbiting_body": "Earth",
-        "miss_distance_km": 68214230.50158624,
-        "relative_velocity_km_s": 29.646846908
-      }
-    }
-  ],
-  "date_utc": "2025-09-08",
-  "snapshot_utc": "2025-09-08T18:14:06Z",
-  "count": 1
+  "potentially_hazardous_neos": [],
+  "date_utc": "2025-09-09",
+  "snapshot_utc": "2025-09-09T00:44:24Z",
+  "count": 0
 }

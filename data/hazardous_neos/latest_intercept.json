@@ -1,7 +1,7 @@
 {
-  "date_utc": "2025-09-08",
-  "snapshot_utc": "2025-09-08T18:14:07.513353Z",
-  "count": 1,
+  "date_utc": "2025-09-09",
+  "snapshot_utc": "2025-09-09T00:44:25.649413Z",
+  "count": 0,
   "schema": {
     "version": "1.3.0",
     "source": "neo_intercept_planner.py",
@@ -11,48 +11,5 @@
       "leo_alt_km": 500.0
     }
   },
-  "potentially_hazardous_neos": [
-    {
-      "name": "(2000 QV7)",
-      "neo_reference_id": "3046125",
-      "absolute_magnitude_h": 21.55,
-      "estimated_diameter_m_min": 130.1832101881,
-      "estimated_diameter_m_max": 291.0985075098,
-      "close_approach": {
-        "date_full": "2025-Sep-08 06:25",
-        "orbiting_body": "Earth",
-        "miss_distance_km": 68214230.50158624,
-        "relative_velocity_km_s": 29.646846908
-      },
-      "intercept_plan": {
-        "schema_version": "1.3.0",
-        "profile": "neosurveyor",
-        "r1_AU": 1.0,
-        "r2_AU": 1.0,
-        "tof_days": 182.62844917963588,
-        "synodic_days": 1000000000.0,
-        "arrival_utc": "2025-09-09T06:25:00Z",
-        "departure_utc": "2025-03-10T15:20:01.990879Z",
-        "rolled_forward": true,
-        "roll_periods_added": 1,
-        "dv_depart_heliocentric_m_s": 0.0,
-        "dv_arrive_heliocentric_m_s": 0.0,
-        "v_inf_m_s": 0.0,
-        "dv_from_LEO_m_s": 3153.245550381598,
-        "dv_total_m_s": 3153.245550381598,
-        "leo_altitude_m": 500000.0,
-        "spacecraft_mass_kg": 1300.0,
-        "Isp_s": 230.0,
-        "propellant_estimate_kg": 978.7843334451009,
-        "suggested_orbit": {
-          "radius_m": 1105.320429424475,
-          "altitude_m": 1000.0,
-          "circular_speed_m_s": 0.02431011411927158,
-          "period_s": 285680.8095516002,
-          "note": "alt >= max(3R,1 km); density 2 g/cc assumed"
-        },
-        "notes": "Hohmann for sizing; Lambert block provides true rendezvous when present."
-      }
-    }
-  ]
+  "potentially_hazardous_neos": []
 }
