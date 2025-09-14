@@ -16,18 +16,18 @@
     {
       "name": "(2025 QR1)",
       "neo_reference_id": "54541107",
-      "absolute_magnitude_h": 21.773,
-      "estimated_diameter_m_min": 117.4775759395,
-      "estimated_diameter_m_max": 262.6878456327,
+      "absolute_magnitude_h": 21.803,
+      "estimated_diameter_m_min": 115.8657231708,
+      "estimated_diameter_m_max": 259.0836332722,
       "close_approach": {
         "date_full": "2025-Sep-14 01:35",
         "orbiting_body": "Earth",
-        "miss_distance_km": 7544366.89081686,
-        "relative_velocity_km_s": 8.7443175411
+        "miss_distance_km": 7546547.623847211,
+        "relative_velocity_km_s": 8.746851704
       }
     }
   ],
   "date_utc": "2025-09-14",
-  "snapshot_utc": "2025-09-14T06:12:54Z",
+  "snapshot_utc": "2025-09-14T12:15:48Z",
   "count": 2
 }
