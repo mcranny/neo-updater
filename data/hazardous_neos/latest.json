@@ -1,20 +1,6 @@
 {
-  "potentially_hazardous_neos": [
-    {
-      "name": "(2009 SG18)",
-      "neo_reference_id": "3467394",
-      "absolute_magnitude_h": 17.85,
-      "estimated_diameter_m_min": 715.4099508838,
-      "estimated_diameter_m_max": 1599.7052819559,
-      "close_approach": {
-        "date_full": "2025-Sep-15 16:05",
-        "orbiting_body": "Earth",
-        "miss_distance_km": 17071556.983058635,
-        "relative_velocity_km_s": 34.3334728457
-      }
-    }
-  ],
-  "date_utc": "2025-09-15",
-  "snapshot_utc": "2025-09-15T18:14:13Z",
-  "count": 1
+  "potentially_hazardous_neos": [],
+  "date_utc": "2025-09-16",
+  "snapshot_utc": "2025-09-16T00:43:23Z",
+  "count": 0
 }
