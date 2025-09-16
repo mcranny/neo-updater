@@ -1,7 +1,4 @@
 {
-  "date_utc": "2025-08-26",
-  "snapshot_utc": "2025-08-26T02:18:06.373979Z",
-  "count": 1,
   "schema": {
     "version": "1.3.0",
     "source": "neo_intercept_planner.py",
