@@ -1,0 +1,16 @@
+{
+  "potentially_hazardous_neos": [
+    {
+      "name": "(433) Eros (sample)",
+      "estimated_diameter": {
+        "meters": { "estimated_diameter_min": 16000, "estimated_diameter_max": 17000 }
+      },
+      "elements": {
+        "a_AU": 1.458, "e": 0.223, "i_deg": 10.83, "raan_deg": 304.4, "argp_deg": 178.7, "M_deg": 90.0
+      },
+      "close_approach_data": [
+        { "orbiting_body": "Earth", "close_approach_date": "2026-01-01" }
+      ]
+    }
+  ]
+}

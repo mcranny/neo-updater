@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-NEO Updater — GMAT/KSP-style Qt Viewer (Lambert-aware)
+NEO Updater — Qt Viewer (Lambert-aware)
 - Big canvas (dark theme), table on bottom
 - Distinct Earth/Target orbits + gold transfer
 - Kepler-timed motion for Earth/Target and transfer (Hohmann half-ellipse) in legacy mode
@@ -23,6 +23,29 @@ from PySide6.QtWidgets import (
     QGraphicsView, QGraphicsScene, QGraphicsEllipseItem, QGraphicsSimpleTextItem,
     QGraphicsPathItem, QGraphicsLineItem, QStyleFactory
 )
+from statistics import median as _median
+
+# --- Qt enum compatibility shims (Pylance-friendly) ---
+from typing import Any
+from PySide6.QtWidgets import QGraphicsView, QAbstractItemView  # add QAbstractItemView import
+
+def _qt_enum(ns: str, member: str, fallback: Any) -> Any:
+    nsobj = getattr(Qt, ns, None)
+    return getattr(nsobj, member, fallback) if nsobj is not None else fallback
+
+QtHorizontal       = _qt_enum("Orientation",    "Horizontal",       Qt.Horizontal)
+QtVertical         = _qt_enum("Orientation",    "Vertical",         Qt.Vertical)
+QtDashLine         = _qt_enum("PenStyle",       "DashLine",         Qt.DashLine)
+QtNoPen            = _qt_enum("PenStyle",       "NoPen",            Qt.NoPen)
+QtNoBrush          = _qt_enum("BrushStyle",     "NoBrush",          Qt.NoBrush)
+QtAlignCenter      = _qt_enum("AlignmentFlag",  "AlignCenter",      Qt.AlignCenter)
+QtKeepAspectRatio  = _qt_enum("AspectRatioMode","KeepAspectRatio",  Qt.KeepAspectRatio)
+
+QGVScrollHandDrag  = getattr(getattr(QGraphicsView, "DragMode", QGraphicsView), 
+                             "ScrollHandDrag", QGraphicsView.ScrollHandDrag)
+
+AU_KM = 149_597_870.7
+AU_M  = 149_597_870_700.0
 
 DEFAULT_INTERCEPT = Path("data/hazardous_neos/latest_intercept.json")
 
@@ -118,7 +141,8 @@ class OrbitView(QGraphicsView):
         self.setRenderHints(self.renderHints() | QPainter.Antialiasing | QPainter.SmoothPixmapTransform)
         self.setBackgroundBrush(QBrush(QColor("#0e0f13")))
         self.setDragMode(QGraphicsView.ScrollHandDrag)
-        self.scene = QGraphicsScene(self); self.setScene(self.scene)
+        self._scene = QGraphicsScene(self)
+        self.setScene(self._scene)
 
         # ---- PHYSICS (AU) ----
         self.r1_phys = 1.0
@@ -134,8 +158,9 @@ class OrbitView(QGraphicsView):
         self.n1 = mean_motion(self.r1_phys)
         self.n2 = mean_motion(self.r2_phys)
 
-        # target initial phase for legacy phasing
-        self.thetaN0 = 0.0
+        # initial phases
+        self.thetaE0 = 0.0   # Earth anchor (Lambert dep heading)
+        self.thetaN0 = 0.0   # Target start so it arrives at Lambert endpoint
 
         # ---- DRAWING (AU, visual only) ----
         self.r1_draw = 1.0
@@ -178,6 +203,7 @@ class OrbitView(QGraphicsView):
         self.earthOrbit = QGraphicsEllipseItem()
         self.neoOrbit = QGraphicsEllipseItem()
         self.transfer = QGraphicsEllipseItem()        # legacy Hohmann
+        self.xferFull = QGraphicsPathItem()   # full Lambert polyline (background)
         self.scTrack = QGraphicsPathItem()
         self.earthDot = QGraphicsEllipseItem()
         self.neoDot = QGraphicsEllipseItem()
@@ -193,7 +219,7 @@ class OrbitView(QGraphicsView):
         self.closestText = QGraphicsSimpleTextItem("")
 
     def _build_static(self):
-        self.scene.clear(); self._new_items()
+        self._scene.clear(); self._new_items()
         gridPen=QPen(QColor("#2a2f3a"),1.0,Qt.DashLine); gridPen.setCosmetic(True)
         axisPen=QPen(QColor("#3b4252"),1.25); axisPen.setCosmetic(True)
         earthPen=QPen(QColor("#3fbdf1"),2.2); earthPen.setCosmetic(True)
@@ -205,44 +231,49 @@ class OrbitView(QGraphicsView):
         sunBrush=QBrush(QColor("#ffd166"))
         interceptPen=QPen(QColor("#ffd480")); interceptPen.setWidthF(2.0); interceptPen.setCosmetic(True)
         closestPen=QPen(QColor("#9aa3b2")); closestPen.setStyle(Qt.DashLine); closestPen.setCosmetic(True)
+        xferFullPen = QPen(QColor("#f6c177"), 1.2)  # thin, faint
+        xferFullPen.setCosmetic(True); xferFullPen.setColor(QColor(246, 193, 119, 160))
 
         s=self._scale_px_per_AU(); Rmax=max(self.r1_draw,self.r2_draw)
         rings=max(4,int(math.ceil(Rmax/0.5))+1)
         for i in range(1,rings+1):
             r=i*0.5*s; el=QGraphicsEllipseItem(-r,-r,2*r,2*r)
-            el.setPen(gridPen); self.scene.addItem(el); self.gridRings.append(el)
+            el.setPen(gridPen); self._scene.addItem(el); self.gridRings.append(el)
         L=(Rmax+0.75)*s; xAx=QGraphicsLineItem(-L,0,L,0); yAx=QGraphicsLineItem(0,-L,0,L)
-        xAx.setPen(axisPen); yAx.setPen(axisPen); self.scene.addItem(xAx); self.scene.addItem(yAx); self.axes=[xAx,yAx]
+        xAx.setPen(axisPen); yAx.setPen(axisPen); self._scene.addItem(xAx); self._scene.addItem(yAx); self.axes=[xAx,yAx]
 
-        self.sun.setRect(QRectF(-7,-7,14,14)); self.sun.setBrush(sunBrush); self.sun.setPen(QPen(Qt.NoPen)); self.scene.addItem(self.sun)
+        self.sun.setRect(QRectF(-7,-7,14,14)); self.sun.setBrush(sunBrush); self.sun.setPen(QPen(Qt.NoPen)); self._scene.addItem(self.sun)
 
         self.earthOrbit.setPen(earthPen); self.neoOrbit.setPen(neoPen)
         self.transfer.setPen(xferPen); self.transfer.setBrush(Qt.NoBrush)
-        self.scene.addItem(self.earthOrbit); self.scene.addItem(self.neoOrbit); self.scene.addItem(self.transfer)
+        self._scene.addItem(self.earthOrbit); self._scene.addItem(self.neoOrbit); self._scene.addItem(self.transfer)
 
-        self.scTrack.setPen(trailPen); self.scTrack.setBrush(Qt.NoBrush); self.scene.addItem(self.scTrack)
+        self.scTrack.setPen(trailPen); self.scTrack.setBrush(Qt.NoBrush); self._scene.addItem(self.scTrack)
 
         for dot,br in ((self.earthDot,earthBrush),(self.neoDot,neoBrush),(self.scDot,scBrush)):
-            dot.setPen(dotPen); dot.setBrush(br); self.scene.addItem(dot)
+            dot.setPen(dotPen); dot.setBrush(br); self._scene.addItem(dot)
 
         for lbl,col in ((self.lblEarth,"#9cc9ff"),(self.lblNeo,"#c3f28e"),(self.lblSc,"#ffc9a3")):
-            f=QFont("Helvetica",10); lbl.setFont(f); lbl.setBrush(QBrush(QColor(col))); self.scene.addItem(lbl)
+            f=QFont("Helvetica",10); lbl.setFont(f); lbl.setBrush(QBrush(QColor(col))); self._scene.addItem(lbl)
 
         self._legend()
 
-        self.note.setBrush(QBrush(QColor("#e9d5ac"))); self.note.setFont(QFont("Helvetica",9)); self.scene.addItem(self.note)
+        self.note.setBrush(QBrush(QColor("#e9d5ac"))); self.note.setFont(QFont("Helvetica",9)); self._scene.addItem(self.note)
 
         self.interceptRing.setRect(QRectF(-6,-6,12,12)); self.interceptRing.setPen(interceptPen); self.interceptRing.setBrush(Qt.NoBrush)
         self.closestRing.setRect(QRectF(-5,-5,10,10)); self.closestRing.setPen(closestPen); self.closestRing.setBrush(Qt.NoBrush)
         self.interceptText.setBrush(QBrush(QColor("#ffd480"))); self.interceptText.setFont(QFont("Helvetica",9))
         self.closestText.setBrush(QBrush(QColor("#b8c0cc"))); self.closestText.setFont(QFont("Helvetica",9))
-        self.scene.addItem(self.interceptRing); self.scene.addItem(self.interceptText)
-        self.scene.addItem(self.closestRing); self.scene.addItem(self.closestText)
+        self._scene.addItem(self.interceptRing); self._scene.addItem(self.interceptText)
+        self._scene.addItem(self.closestRing); self._scene.addItem(self.closestText)
+        self._scene.addItem(self.earthOrbit); self._scene.addItem(self.neoOrbit); self._scene.addItem(self.transfer)
+        self.xferFull.setPen(xferFullPen); self.xferFull.setBrush(Qt.NoBrush); self._scene.addItem(self.xferFull)
+
         self.interceptRing.hide(); self.interceptText.hide()
         self.closestRing.hide(); self.closestText.hide()
 
         self._update_geometry()
-        self.fitInView(self.scene.itemsBoundingRect().adjusted(-40,-40,40,40), Qt.KeepAspectRatio)
+        self.fitInView(self._scene.itemsBoundingRect().adjusted(-40,-40,40,40), Qt.KeepAspectRatio)
 
     def _legend(self):
         entries=[("Earth orbit","#3fbdf1"),("Target orbit","#a4e86e"),("Transfer (SC)","#f6c177")]
@@ -250,8 +281,110 @@ class OrbitView(QGraphicsView):
         for txt,col in entries:
             sw=QGraphicsEllipseItem(0,0,10,10); sw.setBrush(QBrush(QColor(col))); sw.setPen(QPen(Qt.NoPen))
             t=QGraphicsSimpleTextItem(txt); t.setBrush(QBrush(QColor("#cdd6f4"))); t.setFont(QFont("Helvetica",9))
-            self.scene.addItem(sw); self.scene.addItem(t)
+            self._scene.addItem(sw); self._scene.addItem(t)
             self.legendSwatches.append(sw); self.legendItems.append(t)
+
+    def _normalize_lambert_units(self, pts_xy):
+        """Return polyline points in AU. Accepts AU, km, or m; auto-detects scale."""
+        if not pts_xy:
+            return pts_xy
+        radii = []
+        clean = []
+        for p in pts_xy:
+            try:
+                x, y = float(p[0]), float(p[1])
+                if math.isfinite(x) and math.isfinite(y):
+                    clean.append((x, y)); radii.append(math.hypot(x, y))
+            except Exception:
+                pass
+        if not radii or len(clean) < 2:
+            return []
+        med_r = _median(radii)
+        r_ref_au = max(self.r1_phys, self.r2_phys, 1.0)
+        ratio = med_r / r_ref_au if r_ref_au > 0 else med_r
+        if 1e-3 <= ratio <= 1e3:   # already AU-ish
+            return clean
+        scale = AU_M if med_r > 1e9 else AU_KM
+        return [(x/scale, y/scale) for (x, y) in clean]
+
+    def _clean_and_orient_lambert_pts(self, pts_xy):
+        """Drop non-finite points, ensure first point ~departure (closest to r1), resample uniformly by arc length."""
+        pts = [(float(x), float(y)) for (x, y) in pts_xy if math.isfinite(x) and math.isfinite(y)]
+        if len(pts) < 2:
+            return []
+        r1 = self.r1_phys if self.r1_phys > 0 else 1.0
+        d0 = abs(math.hypot(*pts[0]) - r1)
+        dN = abs(math.hypot(*pts[-1]) - r1)
+        if dN < d0:
+            pts.reverse()
+
+        # remove zero-length duplicates
+        dedup = [pts[0]]
+        for p in pts[1:]:
+            if math.hypot(p[0]-dedup[-1][0], p[1]-dedup[-1][1]) > 1e-12:
+                dedup.append(p)
+        if len(dedup) < 2:
+            return dedup
+
+        # cumulative arc length
+        cum = [0.0]
+        for i in range(1, len(dedup)):
+            dx = dedup[i][0]-dedup[i-1][0]; dy = dedup[i][1]-dedup[i-1][1]
+            cum.append(cum[-1] + math.hypot(dx, dy))
+        total = cum[-1]
+        if total <= 0:
+            return dedup
+
+        # resample to stable N
+        N = max(200, min(800, len(dedup)))
+        import bisect
+        out = []
+        for k in range(N):
+            s = (k/(N-1)) * total
+            j = bisect.bisect_left(cum, s)
+            if j <= 0: out.append(dedup[0]); continue
+            if j >= len(cum): out.append(dedup[-1]); continue
+            t = (s - cum[j-1]) / (cum[j]-cum[j-1] + 1e-18)
+            x = dedup[j-1][0] + t*(dedup[j][0]-dedup[j-1][0])
+            y = dedup[j-1][1] + t*(dedup[j][1]-dedup[j-1][1])
+            out.append((x, y))
+        return out
+
+    def _prep_lambert_path(self, pts):
+        """Precompute 0..1 arclength for fast sampling & build the full background QPainterPath."""
+        if not pts or len(pts) < 2:
+            self._lam_pts = []
+            self._lam_s = []
+            return QPainterPath()
+        self._lam_pts = pts
+        # cumulative length
+        s = [0.0]
+        for i in range(1, len(pts)):
+            dx = pts[i][0]-pts[i-1][0]; dy = pts[i][1]-pts[i-1][1]
+            s.append(s[-1] + math.hypot(dx, dy))
+        L = s[-1] if s[-1] > 0 else 1.0
+        self._lam_s = [si / L for si in s]  # normalized 0..1
+
+        # full background path
+        path = QPainterPath(QPointF(pts[0][0]*self._scale_px_per_AU(), pts[0][1]*self._scale_px_per_AU()))
+        sa = self._scale_px_per_AU()
+        for (x, y) in pts[1:]:
+            path.lineTo(QPointF(x*sa, y*sa))
+        return path
+
+    def _sample_lambert_by_f(self, f: float):
+        """Return (x_au, y_au) at fraction f of arc length (0..1)."""
+        if not getattr(self, "_lam_pts", None) or not getattr(self, "_lam_s", None):
+            return 0.0, 0.0
+        f = min(max(f, 0.0), 1.0)
+        import bisect
+        j = bisect.bisect_left(self._lam_s, f)
+        if j <= 0: return self._lam_pts[0]
+        if j >= len(self._lam_s): return self._lam_pts[-1]
+        t = (f - self._lam_s[j-1]) / (self._lam_s[j]-self._lam_s[j-1] + 1e-18)
+        x = self._lam_pts[j-1][0] + t*(self._lam_pts[j][0]-self._lam_pts[j-1][0])
+        y = self._lam_pts[j-1][1] + t*(self._lam_pts[j][1]-self._lam_pts[j-1][1])
+        return x, y
 
     # ---------- plan & geometry ----------
     def setPlan(self, plan: dict):
@@ -272,7 +405,7 @@ class OrbitView(QGraphicsView):
         # Legacy target phase (π for outward, 0 for inward)
         tof_yrs = self.tof_days / 365.25
         rendez_angle = math.pi if self.r2_phys >= self.r1_phys else 0.0
-        self.thetaN0 = (rendez_angle - self.n2 * tof_yrs) % (2*math.pi)
+        self.thetaN0 = (rendez_angle - self.n2 * tof_yrs) % (2*math.pi)  # will be overridden in Lambert mode
 
         # DRAW radii (visual separation only if r1≈r2)
         self.r1_draw = self.r1_phys
@@ -288,15 +421,35 @@ class OrbitView(QGraphicsView):
         self.e_draw = math.sqrt(max(0.0, 1.0 - (self.b_draw*self.b_draw)/(self.a_draw*self.a_draw)))
 
         # Lambert mode?
-        lambert = plan.get("lambert")
-        pts = plan.get("lambert_polyline_xy_au") or []
+        lambert_raw = plan.get("lambert")
+        lambert = lambert_raw if isinstance(lambert_raw, dict) else {}
+
+        pts_raw = plan.get("lambert_polyline_xy_au") or []
+        pts_norm = self._normalize_lambert_units(pts_raw)
+        pts = self._clean_and_orient_lambert_pts(pts_norm)
+
         self.use_lambert = bool(lambert and pts)
         self.lambert_pts = pts if self.use_lambert else []
+
         if self.use_lambert:
-            try:
-                self.tof_days = float(lambert.get("tof_days", self.tof_days))
-            except Exception:
-                pass
+            # TOF from lambert wins if present
+            tof_val = lambert.get("tof_days")
+            if tof_val is not None:
+                try: self.tof_days = float(tof_val)
+                except Exception: pass
+
+            # Precompute arclength & draw full path (background)
+            self.xferFull.setVisible(True)
+            self.xferFull.setPath(self._prep_lambert_path(self.lambert_pts))
+
+            # Anchor Earth to departure heading; phase target to arrive at end
+            th_dep = math.atan2(self.lambert_pts[0][1], self.lambert_pts[0][0])
+            self.thetaE0 = th_dep
+            th_arr = math.atan2(self.lambert_pts[-1][1], self.lambert_pts[-1][0])
+            self.thetaN0 = (th_arr - self.n2 * (self.tof_days / 365.25)) % (2 * math.pi)
+        else:
+            self.thetaE0 = 0.0
+            self.xferFull.setVisible(False)
 
         # reset state/markers
         self.t_days = 0.0; self.playing = False
@@ -326,11 +479,13 @@ class OrbitView(QGraphicsView):
         self.transfer.setVisible(not self.use_lambert)
 
         # legend & note positions
-        bb=self.scene.itemsBoundingRect(); lx,ly=bb.left()+14, bb.top()+14
+        bb=self._scene.itemsBoundingRect(); lx,ly=bb.left()+14, bb.top()+14
         for i,(sw,txt) in enumerate(zip(self.legendSwatches,self.legendItems)):
             sw.setRect(QRectF(lx, ly+i*18, 10,10)); txt.setPos(lx+14, ly-2+i*18)
         self.note.setText(self.visual_note or ("Lambert mode: trajectory from planner" if self.use_lambert else ""))
         if self.visual_note or self.use_lambert: self.note.setPos(bb.left()+14, bb.bottom()-24)
+        self.transfer.setVisible(not self.use_lambert)
+        self.xferFull.setVisible(self.use_lambert)
 
     # ---------- animation ----------
     def _tick(self):
@@ -353,22 +508,27 @@ class OrbitView(QGraphicsView):
         self.closestRing.hide(); self.closestText.hide()
         self._update_state()
 
-    def _sc_xy_lambert(self, s: float) -> tuple[float,float]:
-        """Return SC xy (pixels) at current time along Lambert polyline."""
-        if not self.lambert_pts or self.tof_days <= 0:
+    def _sc_xy_lambert(self, s_pix_per_au: float) -> tuple[float, float]:
+        """SC xy in pixels at current time using arc-length parameterization."""
+        if self.tof_days <= 0:
             return 0.0, 0.0
         f = max(0.0, min(1.0, self.t_days / self.tof_days))
-        idx = min(int(f * (len(self.lambert_pts) - 1)), len(self.lambert_pts) - 1)
-        x_au, y_au = self.lambert_pts[idx]
-        return x_au*s, y_au*s
+        x_au, y_au = self._sample_lambert_by_f(f)
+        return x_au * s_pix_per_au, y_au * s_pix_per_au
+
 
     def _update_state(self):
         """Advance using PHYSICS timing; draw with DRAW geometry."""
         s = self._scale_px_per_AU()
         t_yrs = self.t_days / 365.25
 
-        # Earth & target angles (legacy circular draw)
-        thetaE = (self.n1 * t_yrs) % (2*math.pi)
+        # Earth & target angles
+        if self.use_lambert:
+            # Earth anchored to Lambert departure heading
+            thetaE = (self.thetaE0 + self.n1 * t_yrs) % (2*math.pi)
+        else:
+            thetaE = (self.n1 * t_yrs) % (2*math.pi)
+
         thetaN = (self.n2 * t_yrs + self.thetaN0) % (2*math.pi)
 
         # Legacy transfer anomaly for Hohmann
@@ -380,19 +540,24 @@ class OrbitView(QGraphicsView):
 
         # Spacecraft XY + trail
         if self.use_lambert:
-            # position on Lambert arc
+            # position on Lambert arc (arc-length)
             x_sc, y_sc = self._sc_xy_lambert(s)
 
-            # build trail along polyline up to current point
+            # grow trail up to current f using precomputed s array
             path = QPainterPath()
             if self.lambert_pts:
-                idx = max(0, min(int((self.t_days / max(self.tof_days, 1e-9)) * (len(self.lambert_pts)-1)), len(self.lambert_pts)-1))
-                x0, y0 = self.lambert_pts[0]
-                path.moveTo(QPointF(x0*s, y0*s))
-                for k in range(1, idx+1):
-                    xk, yk = self.lambert_pts[k]
-                    path.lineTo(QPointF(xk*s, yk*s))
+                f = max(0.0, min(1.0, self.t_days / max(self.tof_days, 1e-9)))
+                import bisect
+                j = bisect.bisect_left(self._lam_s, f) if getattr(self, "_lam_s", None) else 0
+                if j <= 0:
+                    x0, y0 = self.lambert_pts[0]; path.moveTo(QPointF(x0*s, y0*s))
+                else:
+                    x0, y0 = self.lambert_pts[0]; path.moveTo(QPointF(x0*s, y0*s))
+                    for k in range(1, j+1):
+                        xk, yk = self.lambert_pts[k]
+                        path.lineTo(QPointF(xk*s, yk*s))
             self.scTrack.setPath(path)
+
         else:
             # legacy half-ellipse position/trail
             x_sc = a * math.cos(E) - e * a
@@ -406,17 +571,12 @@ class OrbitView(QGraphicsView):
                 path.lineTo(QPointF(xi, yi))
             self.scTrack.setPath(path)
 
-        # Earth/Target dots
+        # Earth/Target dots (target advances to reach Lambert arrival angle at TOF)
         x_e  = self.r1_draw * s * math.cos(thetaE)
         y_e  = self.r1_draw * s * math.sin(thetaE)
 
-        if self.use_lambert and self.lambert_pts:
-            # Put the target dot at the Lambert arrival point so intercept is visually consistent
-            x_end, y_end = self.lambert_pts[-1]
-            x_n, y_n = x_end*s, y_end*s
-        else:
-            x_n  = self.r2_draw * s * math.cos(thetaN)
-            y_n  = self.r2_draw * s * math.sin(thetaN)
+        x_n  = self.r2_draw * s * math.cos(thetaN)
+        y_n  = self.r2_draw * s * math.sin(thetaN)
 
         # dots
         self.earthDot.setRect(QRectF(x_e-6,y_e-6,12,12))
