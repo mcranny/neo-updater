@@ -6,7 +6,7 @@
     "date_max": "+60",
     "dist_max": "0.05"
   },
-  "count": 34,
+  "count": 1,
   "objects": [
     {
       "des": "2025 RD2",
@@ -1570,6 +1570,23 @@
         "moid_au": 0.0062512,
         "moid_jup_au": 3.71135,
         "t_jup": 6.055
+      }
+    }
+  ],
+  "date_utc": "2025-09-17",
+  "snapshot_utc": "2025-09-17T05:50:06Z",
+  "potentially_hazardous_neos": [
+    {
+      "name": "(2001 SY269)",
+      "neo_reference_id": "3082930",
+      "absolute_magnitude_h": 21.5,
+      "estimated_diameter_m_min": 133.2155666981,
+      "estimated_diameter_m_max": 297.8790627982,
+      "close_approach": {
+        "date_full": "2025-Sep-17 04:32",
+        "orbiting_body": "Earth",
+        "miss_distance_km": 54717982.98058141,
+        "relative_velocity_km_s": 27.3870435836
       }
     }
   ]
