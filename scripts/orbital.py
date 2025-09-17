@@ -98,89 +98,95 @@ def stumpff_S(z: Number) -> float:
 def lambert_universal(r1, r2, tof_s: Number, mu: float = MU_SUN,
                       prograde: bool = True, max_iter: int = 80, tol: float = 1e-8):
     """
-    Vallado-like universal variables Lambert. Returns (v1, v2).
-    r1, r2 in meters; tof_s in seconds.
+    Lambert via universal variables (short-way/long-way via 'prograde').
+    r1, r2 in meters; tof_s in seconds. Returns (v1, v2) in m/s.
+
+    Correct formulation (Battin/Vallado):
+      y(z) = r1 + r2 + A * ((z*S(z) - 1) / C(z))
+      x    = sqrt(y/C)
+      t(z) = (x^3*S + A*sqrt(y)) / sqrt(mu)
     """
-    r1 = np.asarray(r1, dtype=float); r2 = np.asarray(r2, dtype=float)
+    r1 = np.asarray(r1, dtype=float).reshape(3)
+    r2 = np.asarray(r2, dtype=float).reshape(3)
     r1n = float(np.linalg.norm(r1))
     r2n = float(np.linalg.norm(r2))
     if r1n == 0.0 or r2n == 0.0:
         raise ValueError("Lambert: |r1| or |r2| is zero")
+    tof_s = float(tof_s)
+    sqrt_mu = math.sqrt(mu)
 
+    # geometry
     cosd = float(np.dot(r1, r2) / (r1n * r2n + 1e-16))
     cosd = max(-1.0, min(1.0, cosd))
     dtheta = math.acos(cosd)
 
-    cross = np.cross(r1, r2)
-    if prograde and float(cross[2]) < 0.0:
+    # short-/long-way selection using out-of-plane direction
+    cz = float(np.cross(r1, r2)[2])
+    if prograde and cz < 0.0:
+        dtheta = 2.0 * math.pi - dtheta
+    if not prograde and cz > 0.0:
         dtheta = 2.0 * math.pi - dtheta
 
     denom = 1.0 - cosd
-    A = math.sin(dtheta) * math.sqrt(max(0.0, r1n * r2n / (denom + 1e-16)))
-    if abs(A) < 1e-12:
+    if abs(denom) < 1e-16:
+        raise ValueError("Lambert geometry singular (Δθ ~ 0)")
+    A = math.sin(dtheta) * math.sqrt(max(0.0, r1n * r2n / denom))
+    if abs(A) < 1e-14:
         raise ValueError("Lambert geometry singular: A≈0")
 
-    sqrt_mu = math.sqrt(mu)
-    tof_s = float(tof_s)
+    def y(z: float) -> float:
+        C = stumpff_C(z)
+        S = stumpff_S(z)
+        Ceff = C if abs(C) > 1e-16 else 1e-16
+        return r1n + r2n + A * ((z * S - 1.0) / Ceff)
 
-    def y(z: Number) -> float:
-        z = float(z)
-        Cz = stumpff_C(z)
-        Sz = stumpff_S(z)
-        # Guard sqrt(Cz) against underflow to 0
-        den = math.sqrt(Cz) if Cz > 1e-16 else 1e-8
-        return float(r1n + r2n + A * ((z * Sz - 1.0) / den))
+    def tof(z: float) -> float:
+        C = stumpff_C(z)
+        S = stumpff_S(z)
+        yy = y(z)
+        if yy <= 0.0:
+            return float('inf')
+        Ceff = C if abs(C) > 1e-16 else 1e-16
+        x = math.sqrt(max(0.0, yy / Ceff))
+        return (x**3 * S + A * math.sqrt(yy)) / sqrt_mu
 
-    def F(z: Number) -> float:
-        z  = float(z)
-        yz = y(z)
-        if yz <= 0.0:
-            # Not physical (or numerically broken); push away
-            return 1e9
-        Cz = stumpff_C(z)
-        Sz = stumpff_S(z)
-        Cz_g = Cz if abs(Cz) > 1e-16 else 1e-16
-        term1 = math.pow(yz / Cz_g, 1.5) * Sz
-        term2 = A * math.sqrt(yz)
-        return float(term1 + term2 - sqrt_mu * tof_s)
+    # bracket and bisection on z
+    z_lo, z_hi = -4.0 * math.pi**2, 4.0 * math.pi**2
+    while y(z_lo) <= 0.0:  # nudge until valid
+        z_lo += 0.5
+        if z_lo > 0.0:
+            break
+    # expand upper bound until t >= tof
+    t_hi = tof(z_hi); tries = 0
+    while (not math.isfinite(t_hi)) or (t_hi < tof_s):
+        z_hi *= 2.0; tries += 1
+        t_hi = tof(z_hi)
+        if tries > 40: break
 
-    # Simple bracket + secant-ish solve on z
-    z0, z1 = -4.0 * math.pi**2, 4.0 * math.pi**2
-    f0, f1 = F(z0), F(z1)
-    if abs(f0) < tol:
-        z_star = z0
-    elif abs(f1) < tol:
-        z_star = z1
-    else:
-        z_star = 0.0
-        for _ in range(max_iter):
-            fz = F(z_star)
-            if abs(fz) < tol:
-                break
-            # pick closer endpoint for secant step
-            if abs(f0 - fz) > abs(f1 - fz):
-                z_star = z_star - fz * (z1 - z_star) / (f1 - fz + 1e-16)
-            else:
-                z_star = z_star - fz * (z0 - z_star) / (f0 - fz + 1e-16)
-            # keep within bracket
-            z_star = float(np.clip(z_star, z0, z1))
+    z = 0.0
+    for _ in range(max_iter):
+        t_z = tof(z)
+        if abs(t_z - tof_s) < tol:
+            break
+        if t_z < tof_s:
+            z_lo = z
+        else:
+            z_hi = z
+        z = 0.5 * (z_lo + z_hi)
 
-    yz = y(z_star)
-    if yz <= 0.0:
-        raise ValueError("Lambert: y(z*) <= 0")
-
-    f    = 1.0 - yz / r1n
-    g    = A * math.sqrt(yz / mu)
-    gdot = 1.0 - yz / r2n
-
-    # Guard tiny g
-    if abs(g) < 1e-12:
-        g = 1e-12 if g >= 0.0 else -1e-12
+    # f, g, gdot and velocities
+    yy = y(z)
+    if yy <= 0.0:
+        raise RuntimeError("Lambert: y(z*) <= 0 at solution")
+    f    = 1.0 - yy / r1n
+    g    = A * math.sqrt(yy / mu)
+    gdot = 1.0 - yy / r2n
+    if abs(g) < 1e-14:
+        g = math.copysign(1e-14, g)
 
     v1 = (r2 - f * r1) / g
     v2 = (gdot * r2 - r1) / g
     return v1, v2
-
 
 # ---------------- Universal Kepler propagator ----------------
 def kepler_universal_propagate(r0, v0, dt: Number, mu: float = MU_SUN,
