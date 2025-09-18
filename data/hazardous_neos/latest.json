@@ -1573,20 +1573,20 @@
       }
     }
   ],
-  "date_utc": "2025-09-17",
-  "snapshot_utc": "2025-09-17T05:50:06Z",
+  "date_utc": "2025-09-18",
+  "snapshot_utc": "2025-09-18T07:42:59Z",
   "potentially_hazardous_neos": [
     {
-      "name": "(2001 SY269)",
-      "neo_reference_id": "3082930",
-      "absolute_magnitude_h": 21.5,
-      "estimated_diameter_m_min": 133.2155666981,
-      "estimated_diameter_m_max": 297.8790627982,
+      "name": "(2025 FA22)",
+      "neo_reference_id": "54525863",
+      "absolute_magnitude_h": 21.65,
+      "estimated_diameter_m_min": 124.3240005541,
+      "estimated_diameter_m_max": 277.9969164738,
       "close_approach": {
-        "date_full": "2025-Sep-17 04:32",
+        "date_full": "2025-Sep-18 07:42",
         "orbiting_body": "Earth",
-        "miss_distance_km": 54717982.98058141,
-        "relative_velocity_km_s": 27.3870435836
+        "miss_distance_km": 842054.680521773,
+        "relative_velocity_km_s": 10.7855546487
       }
     }
   ]

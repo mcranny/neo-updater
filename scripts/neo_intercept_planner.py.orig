@@ -489,9 +489,7 @@ def lambert_polyline_always(r1_m: np.ndarray, r2_m: np.ndarray, tof_s: float, n:
             return _force_endpoints(pts, r1_m, r2_m)
         except Exception as e:
             last_err = e
-    # Fallback disabled on this build to avoid LAPACK DLASCL issues
-    raise RuntimeError('Lambert universal failed; fallback disabled')
-    # Fallback: shooting solve (disabled)
+    # Fallback: shooting solve in v1 space (Broyden-like with finite differences)
     chord = (r2_m - r1_m) / max(1e-9, tof_s)
     zhat = np.cross(r1_m, r2_m)
     t_hat = np.cross(zhat, r1_m)

@@ -1,0 +1,403 @@
+#!/usr/bin/env python3
+"""
+Deterministic, frame-consistent Lambert harness using SBDB + Skyfield.
+
+- Fetches a NEO's osculating elements from SBDB using a *lettered* designation
+  (e.g., "2025 FA22" — no parentheses).
+- Computes Earth's heliocentric ecliptic J2000 state via Skyfield (DE421).
+- Propagates the NEO from its SBDB epoch (JD TDB) to the arrival epoch using 2-body.
+- Solves Lambert using the repo’s universal-variable solver (no least-squares fallback).
+- Tries both prograde=True/False and picks the best endpoint residual.
+- Writes a JSON with a transfer polyline and residual.
+
+Usage examples:
+  python -m scripts.lambert_sbdb_skyfield --from-latest --depart-days 90 --tof-days 180
+  python -m scripts.lambert_sbdb_skyfield --des "2025 FA22" --depart-days 75 --tof-days 150 --polyline-n 600
+"""
+
+from __future__ import annotations
+import argparse
+import json
+import math
+import os
+import sys
+from datetime import datetime, timezone, timedelta
+from typing import Any, Dict, Tuple, Optional, List
+
+import numpy as np
+import requests
+
+# --- Pull only the Lambert solver and constants from the project ---
+try:
+    # NOTE: This file name/path matches the repo; adjust if you relocated it.
+    from scripts.neo_intercept_planner import (
+        AU_M, MU_SUN, lambert_universal
+    )
+except Exception as e:
+    # Hard fallback constants if import path differs; Lambert must still import from the repo.
+    AU_M  = 149_597_870_700.0                   # meters
+    MU_SUN = 1.32712440018e20                   # m^3/s^2
+    raise SystemExit(
+        "Import from scripts.neo_intercept_planner failed. Run from the repo root so the module is importable.\n"
+        f"Original import error: {e}"
+    )
+
+AU_KM = 149_597_870.7
+DEG2RAD = math.pi / 180.0
+OBLIQ_J2000_DEG = 23.439291111  # J2000 obliquity (IAU 2006) for eq->ecl rotation
+
+# ----------------------- small utilities -----------------------
+
+def deg2rad(x: float) -> float:
+    return x * DEG2RAD
+
+def now_utc() -> datetime:
+    return datetime.now(timezone.utc)
+
+def iso_z(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).replace(tzinfo=timezone.utc).isoformat().replace("+00:00","Z")
+
+def jd_tdb_from_datetime(dt: datetime) -> float:
+    """UTC→TDB JD via Skyfield; minor fallback if Skyfield missing."""
+    try:
+        from skyfield.api import load
+        ts = load.timescale()
+        t  = ts.from_datetime(dt.astimezone(timezone.utc))
+        return float(t.tdb)
+    except Exception:
+        JD_UNIX_EPOCH = 2440587.5
+        return JD_UNIX_EPOCH + dt.timestamp()/86400.0 + 0.0008  # rough UTC→TDB
+
+def _first(d: Dict[str, Any], *keys: str) -> Any:
+    for k in keys:
+        if k in d and d[k] is not None and str(d[k]).strip() != "":
+            return d[k]
+    raise KeyError(f"Missing required keys {keys}")
+
+def _ffloat(val: Any, name: str) -> float:
+    if val is None:
+        raise ValueError(f"Field '{name}' is None")
+    try:
+        return float(val)
+    except Exception as e:
+        raise ValueError(f"Field '{name}' not convertible to float: {val!r}") from e
+
+def eq_to_ecl(v: np.ndarray) -> np.ndarray:
+    """Equatorial J2000 -> Ecliptic J2000 (rotate about +X by +epsilon)."""
+    eps = deg2rad(OBLIQ_J2000_DEG)
+    c, s = math.cos(eps), math.sin(eps)
+    x, y, z = float(v[0]), float(v[1]), float(v[2])
+    return np.array([x, c*y + s*z, -s*y + c*z], dtype=float)
+
+# ----------------------- Earth ephemeris -----------------------
+
+def earth_state_helioc_ecl_au(t_utc: datetime) -> Tuple[np.ndarray, np.ndarray]:
+    """Earth heliocentric ecliptic J2000 state (AU, AU/s) using Skyfield DE421."""
+    try:
+        from skyfield.api import load
+    except Exception as e:
+        raise SystemExit("Skyfield not installed. Run:  pip install skyfield jplephem") from e
+
+    ts = load.timescale()
+    t  = ts.from_datetime(t_utc.astimezone(timezone.utc))
+    eph = load('de421.bsp')
+
+    sun_body   = eph['sun']
+    earth_body = eph['earth']
+
+    rE_eq_km  = np.array(earth_body.at(t).position.km)      - np.array(sun_body.at(t).position.km)
+    vE_eq_kms = np.array(earth_body.at(t).velocity.km_per_s) - np.array(sun_body.at(t).velocity.km_per_s)
+
+    rE_ecl_km  = eq_to_ecl(rE_eq_km)
+    vE_ecl_kms = eq_to_ecl(vE_eq_kms)
+
+    return (rE_ecl_km / AU_KM, vE_ecl_kms / AU_KM)
+
+# ----------------------- SBDB elements -----------------------
+
+def fetch_sbdb_elements(designation: str, timeout: float = 20.0) -> Dict[str, Any]:
+    """
+    Fetch SBDB osculating elements for a given designation (e.g., '2025 FA22').
+    Do NOT pass parentheses; pass a plain lettered designation or name.
+    We deliberately query with only `sstr` to avoid 400s from certain proxies.
+    """
+    designation = designation.strip().replace("(", "").replace(")", "")
+    if not any(c.isalpha() for c in designation):
+        raise SystemExit(f"Refusing SBDB query for non-lettered sstr='{designation}'. Use e.g. '2025 FA22'.")
+
+    r = requests.get("https://ssd-api.jpl.nasa.gov/sbdb.api",
+                     params={"sstr": designation},
+                     timeout=timeout)
+    r.raise_for_status()
+    data = r.json()
+    if not isinstance(data, dict) or not data:
+        raise SystemExit("SBDB returned empty payload")
+    return data
+
+def parse_elements(sbdb: Dict[str, Any]) -> Tuple[float,float,float,float,float,float,float]:
+    """
+    Return (a_AU, e, i_rad, Omega_rad, w_rad, M0_rad, epoch_jd_tdb).
+    Works with {'orbit':{'elements':...}} or {'object':{'orbit':{'elements':...}}}.
+    """
+    o = sbdb.get('orbit') or (sbdb.get('object') or {}).get('orbit')
+    if not isinstance(o, dict):
+        raise SystemExit("SBDB payload missing 'orbit'")
+    el = o.get('elements') or {}
+    if not isinstance(el, dict):
+        raise SystemExit("SBDB 'orbit.elements' missing or wrong type")
+
+    a   = _ffloat(_first(el, 'a', 'a_AU'), 'a')
+    e   = _ffloat(_first(el, 'e'), 'e')
+    inc = deg2rad(_ffloat(_first(el, 'i', 'incl', 'inclination'), 'i_deg'))
+    Om  = deg2rad(_ffloat(_first(el, 'om', 'Omega', 'node', 'Ω'), 'Omega_deg'))
+    w   = deg2rad(_ffloat(_first(el, 'w', 'arg', 'peri'), 'w_deg'))
+    M0  = deg2rad(_ffloat(_first(el, 'ma', 'M', 'mean_anomaly'), 'M_deg'))
+
+    epoch = o.get('epoch') or el.get('epoch') or {}
+    jd: Optional[float] = None
+    if isinstance(epoch, dict):
+        for k in ('jd_tdb', 'jd', 'epoch_jd', 'jd_utc'):
+            if k in epoch and epoch[k] is not None:
+                jd = _ffloat(epoch[k], k)
+                break
+    elif isinstance(epoch, (str, float, int)):
+        jd = _ffloat(epoch, 'epoch_jd')
+    if jd is None:
+        raise SystemExit("SBDB epoch JD missing")
+
+    return (a, e, inc, Om, w, M0, jd)
+
+# ----------------------- 2-body helpers -----------------------
+
+def kepler_E_from_M(M: float, e: float, tol: float = 1e-12, itmax: int = 50) -> float:
+    """Solve Kepler's equation M = E - e*sin(E) for eccentric E."""
+    M = math.fmod(M, 2.0*math.pi)
+    if M < -math.pi: M += 2.0*math.pi
+    if M >  math.pi: M -= 2.0*math.pi
+    E = M if e < 0.8 else math.pi
+    for _ in range(itmax):
+        f  = E - e*math.sin(E) - M
+        fp = 1.0 - e*math.cos(E)
+        dE = -f/fp
+        E += dE
+        if abs(dE) < tol: break
+    return E
+
+def rot3(theta: float) -> np.ndarray:
+    c, s = math.cos(theta), math.sin(theta)
+    return np.array([[ c, s, 0.0],
+                     [-s, c, 0.0],
+                     [ 0.0, 0.0, 1.0]], dtype=float)
+
+def rot1(theta: float) -> np.ndarray:
+    c, s = math.cos(theta), math.sin(theta)
+    return np.array([[1.0, 0.0, 0.0],
+                     [0.0,  c,  s ],
+                     [0.0, -s,  c ]], dtype=float)
+
+def oe_to_rv(a_m: float, e: float, i: float, Om: float, w: float, E: float,
+             mu: float = MU_SUN) -> Tuple[np.ndarray, np.ndarray]:
+    """Classical elements → Cartesian (heliocentric) in ecliptic J2000."""
+    n = math.sqrt(mu / (a_m**3))  # rad/s
+    # PQW frame
+    r_p = a_m * (math.cos(E) - e)
+    r_q = a_m * math.sqrt(1.0 - e*e) * math.sin(E)
+    r_pqw = np.array([r_p, r_q, 0.0], dtype=float)
+    r = math.hypot(r_p, r_q)
+    v_factor = (n * a_m) / (1.0 - e*math.cos(E))
+    v_p = -v_factor * math.sin(E)
+    v_q =  v_factor * math.sqrt(1.0 - e*e) * math.cos(E)
+    v_pqw = np.array([v_p, v_q, 0.0], dtype=float)
+
+    # PQW -> Ecliptic J2000
+    R = rot3(Om) @ rot1(i) @ rot3(w)
+    r_ecl = R @ r_pqw
+    v_ecl = R @ v_pqw
+    return r_ecl, v_ecl
+
+def propagate_oe_to_rv_au(a_AU: float, e: float, i: float, Om: float, w: float,
+                           M0: float, epoch_jd_tdb: float, target_jd_tdb: float) -> Tuple[np.ndarray,np.ndarray]:
+    """Two-body propagation from osculating elements at epoch to target time (AU, AU/s)."""
+    a_m = a_AU * AU_M
+    n   = math.sqrt(MU_SUN / (a_m**3))  # rad/s
+    dt_s = (target_jd_tdb - epoch_jd_tdb) * 86400.0
+    M = M0 + n*dt_s
+    # wrap M to [-pi, pi] for stability
+    M = (M + math.pi) % (2.0*math.pi) - math.pi
+    E = kepler_E_from_M(M, e)
+    r_m, v_m_s = oe_to_rv(a_m, e, i, Om, w, E, mu=MU_SUN)
+    return (r_m / AU_M, v_m_s / AU_M)
+
+# ---- Universal Kepler propagation (r0,v0 -> r(t)) for polyline sampling ----
+
+def _stumpff_c2c3(z: float) -> Tuple[float,float]:
+    if z > 1e-8:
+        s = math.sqrt(z)
+        c2 = (1.0 - math.cos(s)) / z
+        c3 = (s - math.sin(s)) / (s**3)
+    elif z < -1e-8:
+        s = math.sqrt(-z)
+        c2 = (1.0 - math.cosh(s)) / z
+        c3 = (math.sinh(s) - s) / (s**3)
+    else:
+        # series expansion around z=0
+        c2 = 0.5 - z/24.0 + z*z/720.0
+        c3 = 1.0/6.0 - z/120.0 + z*z/5040.0
+    return c2, c3
+
+def propagate_rv_universal(r0: np.ndarray, v0: np.ndarray, dt: float, mu: float = MU_SUN) -> Tuple[np.ndarray, np.ndarray]:
+    """Propagate r0,v0 forward by dt using universal variable f,g (single rev)."""
+    r0n = float(np.linalg.norm(r0))
+    v0n2 = float(np.dot(v0, v0))
+    vr0 = float(np.dot(r0, v0)) / r0n
+    alpha = 2.0/r0n - v0n2/mu
+
+    # Initial chi guess (Battin)
+    if abs(alpha) > 1e-12:
+        chi = math.sqrt(mu) * abs(alpha) * dt
+    else:
+        # Parabolic case
+        h = np.linalg.norm(np.cross(r0, v0))
+        p = h*h/mu
+        s = 0.5 * (math.pi/2.0 - math.atan(3.0*math.sqrt(mu/(p**3)) * dt))
+        w = math.atan((math.tan(s))**(1.0/3.0))
+        chi = math.sqrt(p) * 2.0 / math.tan(2.0*w)
+
+    for _ in range(80):
+        z = alpha * chi * chi
+        c2, c3 = _stumpff_c2c3(z)
+        r = chi*chi*c2 + vr0*chi*(1.0 - z*c3) + r0n*(1.0 - z*c2)
+        f = r - math.sqrt(mu)*dt
+        if abs(f) < 1e-8:
+            break
+        df = chi*(1.0 - z*c3) + vr0*(1.0 - z*c2) + r0n*(-alpha*chi*c2)
+        chi -= f/df
+
+    z = alpha * chi * chi
+    c2, c3 = _stumpff_c2c3(z)
+    f = 1.0 - (chi*chi * c2) / r0n
+    g = dt - (chi**3 * c3) / math.sqrt(mu)
+    r = f*r0 + g*v0
+    rn = float(np.linalg.norm(r))
+    fdot = (math.sqrt(mu) / (rn*r0n)) * (z*c3*chi - chi)
+    gdot = 1.0 - (chi*chi * c2) / rn
+    v = fdot*r0 + gdot*v0
+    return r, v
+
+def sample_transfer_polyline(r0_m: np.ndarray, v0_m_s: np.ndarray, tof_s: float, mu: float, n: int) -> List[List[float]]:
+    """Sample the Lambert arc by universally propagating the launch state."""
+    n = max(2, int(n))
+    out = []
+    for k in range(n):
+        t = (k/(n-1)) * tof_s
+        r, _v = propagate_rv_universal(np.array(r0_m, dtype=float), np.array(v0_m_s, dtype=float), float(t), mu)
+        out.append([float(r[0]), float(r[1]), float(r[2])])
+    return out
+
+# ----------------------- latest.json helpers -----------------------
+
+def load_latest_and_pick_designation(latest_path: str) -> str:
+    j = json.load(open(latest_path))
+    arr = (j.get("potentially_hazardous_neos")
+           or j.get("near_earth_objects")
+           or j.get("neos")
+           or j.get("objects")
+           or [])
+    if not arr:
+        raise SystemExit("latest.json has no NEOs.")
+    neo = arr[0]
+    # Choose a lettered designation, prefer with a space (no parentheses)
+    for k in ("des","designation","name"):
+        v = neo.get(k)
+        if isinstance(v, str) and any(c.isalpha() for c in v):
+            return v.replace("(", "").replace(")", "").strip()
+    # Fallback: still return a string (may fail SBDB later if not lettered)
+    return str(neo.get("neo_reference_id") or neo.get("id") or "")
+
+# ----------------------- main -----------------------
+
+def main():
+    ap = argparse.ArgumentParser(description="Lambert test against live SBDB + Skyfield.")
+    g = ap.add_mutually_exclusive_group(required=True)
+    g.add_argument("--des", help="NEO designation, e.g. '2025 FA22' (no parentheses).")
+    g.add_argument("--from-latest", action="store_true", help="Use first object in data/hazardous_neos/latest.json")
+    ap.add_argument("--latest-path", default="data/hazardous_neos/latest.json", help="Path to latest.json")
+    ap.add_argument("--depart-days", type=float, default=90.0, help="Days from now to depart Earth")
+    ap.add_argument("--tof-days", type=float, default=180.0, help="Time of flight in days")
+    ap.add_argument("--polyline-n", type=int, default=600, help="Polyline sampling for final output")
+    ap.add_argument("--out", default="/tmp/lambert_sbdb_out.json", help="Output JSON path")
+    args = ap.parse_args()
+
+    if args.from_latest:
+        des = load_latest_and_pick_designation(args.latest_path)
+    else:
+        des = (args.des or "").replace("(", "").replace(")", "").strip()
+    if not des or not any(c.isalpha() for c in des):
+        raise SystemExit(f"Provide a lettered designation (e.g. '2025 FA22'), got '{des}'")
+
+    dep_utc = now_utc() + timedelta(days=float(args.depart_days))
+    arr_utc = dep_utc      + timedelta(days=float(args.tof_days))
+    dep_jd  = jd_tdb_from_datetime(dep_utc)
+    arr_jd  = jd_tdb_from_datetime(arr_utc)
+
+    print(f"[plan] target='{des}' depart={iso_z(dep_utc)}  TOF={args.tof_days:.3f} d")
+
+    # Earth r1 in heliocentric ecliptic J2000 (AU)
+    r1_au, _vE_au_s = earth_state_helioc_ecl_au(dep_utc)
+
+    # NEO elements from SBDB and state at arrival epoch
+    sbdb = fetch_sbdb_elements(des)
+    aAU,e,i,Om,w,M0,epoch_jd = parse_elements(sbdb)
+    r2_au, _v2_au_s = propagate_oe_to_rv_au(aAU,e,i,Om,w,M0,epoch_jd,arr_jd)
+
+    # Geometry sanity
+    dot = float(np.dot(r1_au, r2_au))
+    a1, a2 = float(np.linalg.norm(r1_au)), float(np.linalg.norm(r2_au))
+    cosang = max(-1.0, min(1.0, dot/(a1*a2)))
+    theta_deg = math.degrees(math.acos(cosang))
+    print(f"[geom] |r1|={a1:.6f} AU  |r2|={a2:.6f} AU  angle={theta_deg:.3f} deg")
+
+    # Lambert (universal) — branch sweep on prograde only (repo signature)
+    tof_s = float(args.tof_days) * 86400.0
+    candidates: List[Dict[str,Any]] = []
+    for prograde in (True, False):
+        try:
+            v1_m_s, v2_m_s = lambert_universal(r1_au*AU_M, r2_au*AU_M, tof_s, MU_SUN, prograde=prograde)
+            poly_m = sample_transfer_polyline(r1_au*AU_M, v1_m_s, tof_s, MU_SUN, n=int(args.polyline_n))
+            end_au = np.array(poly_m[-1]) / AU_M
+            err_km = float(np.linalg.norm(end_au - r2_au) * AU_KM)
+            candidates.append({
+                "v1_m_s": np.array(v1_m_s).tolist(),
+                "v2_m_s": np.array(v2_m_s).tolist(),
+                "endpoint_err_km": err_km,
+                "prograde": bool(prograde),
+                "poly_au": (np.array(poly_m)/AU_M).tolist(),
+            })
+        except Exception:
+            continue
+
+    if not candidates:
+        print("[lambert] universal failed for both prograde branches")
+        sys.exit(2)
+
+    best = min(candidates, key=lambda c: c["endpoint_err_km"])
+
+    out = {
+        "schema": "lambert_sbdb_skyfield/1.0",
+        "target": des,
+        "depart_utc": iso_z(dep_utc),
+        "arrive_utc": iso_z(arr_utc),
+        "tof_days": float(args.tof_days),
+        "earth_r1_au": list(map(float, r1_au)),
+        "neo_r2_au": list(map(float, r2_au)),
+        "branch": {"prograde": bool(best["prograde"])},
+        "endpoint_err_km": float(best["endpoint_err_km"]),
+        "lambert_polyline_xyz_au": best["poly_au"],
+    }
+    os.makedirs(os.path.dirname(args.out), exist_ok=True)
+    with open(args.out, "w") as f:
+        json.dump(out, f)
+    print(f"[ok] wrote {args.out}  endpoint_residual={best['endpoint_err_km']:.3f} km  branch={out['branch']}")
+
+if __name__ == "__main__":
+    main()
