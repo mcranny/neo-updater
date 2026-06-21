@@ -62,7 +62,7 @@ The viewer is modeled after a spaceflight map screen rather than a decorative an
 - Search and select any stored interception from the mission cards in the side panel.
 - Watch the date, elapsed mission time, spacecraft coordinates, Δv, C3, and encounter metrics.
 - Left-drag to pan in the viewing plane, right-drag to orbit, middle-drag to pan vertically, and use the wheel to zoom.
-- Left-click the Sun, planets, target NEO, or spacecraft to open its current state in a separate, movable detail window.
+- Left-click the Sun, planets, target NEO, or spacecraft to open its current state in a draggable inspector contained inside the mission viewer.
 - Distinct halos and colors identify Earth, the target NEO, and the intercept spacecraft at a glance.
 - Switch between mission, inner-system, and full-system camera presets.
 - Scrub to any mission time or play continuously at 0.5-100 simulated days per second.

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -344,48 +345,128 @@ class SolarSystemView(gl.GLViewWidget):
         )
 
 
-class ObjectDetailsDialog(QtWidgets.QDialog):
-    """Non-modal detail card for the selected solar-system object."""
+class ObjectPanelHeader(QtWidgets.QFrame):
+    """Drag handle for the in-app object inspector."""
+
+    def __init__(self, panel: ObjectDetailsPanel) -> None:
+        super().__init__(panel)
+        self.panel = panel
+        self.drag_origin: QtCore.QPoint | None = None
+        self.setObjectName("objectPanelHeader")
+        self.setCursor(QtCore.Qt.CursorShape.SizeAllCursor)
+
+    def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:
+        if event.button() == QtCore.Qt.MouseButton.LeftButton:
+            self.drag_origin = event.globalPosition().toPoint() - self.panel.pos()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:
+        if self.drag_origin is not None and event.buttons() & QtCore.Qt.MouseButton.LeftButton:
+            self.panel.move_clamped(event.globalPosition().toPoint() - self.drag_origin)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:
+        self.drag_origin = None
+        super().mouseReleaseEvent(event)
+
+
+class ObjectDetailsPanel(QtWidgets.QFrame):
+    """Draggable object inspector contained entirely inside the mission viewer."""
+
+    ACCENTS = {
+        "Sun": "#ffe16a",
+        "Earth": "#43abff",
+        "Intercept spacecraft": "#ff851f",
+    }
 
     def __init__(self, parent: QtWidgets.QWidget) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Object Details")
-        self.setWindowFlag(QtCore.Qt.WindowType.Tool, True)
-        self.setModal(False)
-        self.setMinimumWidth(390)
-        self.resize(430, 300)
+        self.setObjectName("objectPanel")
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setFixedWidth(390)
+        self.hide()
 
         layout = QtWidgets.QVBoxLayout(self)
-        layout.setContentsMargins(22, 20, 22, 18)
-        layout.setSpacing(10)
-        eyebrow = QtWidgets.QLabel("SOLAR-SYSTEM OBJECT")
-        eyebrow.setObjectName("objectEyebrow")
+        layout.setContentsMargins(0, 0, 0, 16)
+        layout.setSpacing(0)
+        header = ObjectPanelHeader(self)
+        header_layout = QtWidgets.QHBoxLayout(header)
+        header_layout.setContentsMargins(14, 9, 8, 9)
+        drag_mark = QtWidgets.QLabel("⠿")
+        drag_mark.setObjectName("dragMark")
+        heading = QtWidgets.QLabel("OBJECT INSPECTOR")
+        heading.setObjectName("objectPanelHeading")
+        close_button = QtWidgets.QPushButton("×")
+        close_button.setObjectName("panelClose")
+        close_button.setFixedSize(28, 28)
+        close_button.clicked.connect(self.hide)
+        header_layout.addWidget(drag_mark)
+        header_layout.addWidget(heading)
+        header_layout.addStretch(1)
+        header_layout.addWidget(close_button)
+        layout.addWidget(header)
+
+        body = QtWidgets.QWidget()
+        body_layout = QtWidgets.QVBoxLayout(body)
+        body_layout.setContentsMargins(18, 14, 18, 2)
+        body_layout.setSpacing(10)
+        self.type_label = QtWidgets.QLabel()
+        self.type_label.setObjectName("objectType")
         self.name_label = QtWidgets.QLabel()
         self.name_label.setObjectName("objectName")
-        self.details_label = QtWidgets.QLabel()
-        self.details_label.setObjectName("objectDetails")
-        self.details_label.setTextInteractionFlags(
-            QtCore.Qt.TextInteractionFlag.TextSelectableByMouse
-        )
-        self.details_label.setWordWrap(True)
-        close_button = QtWidgets.QPushButton("Close")
-        close_button.setObjectName("secondaryButton")
-        close_button.clicked.connect(self.hide)
-        button_row = QtWidgets.QHBoxLayout()
-        button_row.addStretch(1)
-        button_row.addWidget(close_button)
-        layout.addWidget(eyebrow)
-        layout.addWidget(self.name_label)
-        layout.addWidget(self.details_label, 1)
-        layout.addLayout(button_row)
+        self.rows_widget = QtWidgets.QWidget()
+        self.rows_layout = QtWidgets.QGridLayout(self.rows_widget)
+        self.rows_layout.setContentsMargins(0, 4, 0, 0)
+        self.rows_layout.setHorizontalSpacing(24)
+        self.rows_layout.setVerticalSpacing(8)
+        body_layout.addWidget(self.type_label)
+        body_layout.addWidget(self.name_label)
+        body_layout.addWidget(self.rows_widget)
+        layout.addWidget(body)
 
     def show_object(self, title: str, details: str) -> None:
-        self.setWindowTitle(f"Object Details — {title}")
+        lines = [line.strip() for line in details.splitlines() if line.strip()]
+        object_type = lines[0] if lines else "SOLAR-SYSTEM OBJECT"
+        accent = self.ACCENTS.get(title, "#66ff99" if "OBJECT" in object_type else "#52d6ec")
+        self.type_label.setText(object_type)
+        self.type_label.setStyleSheet(
+            f"color: #071015; background: {accent}; border-radius: 4px; "
+            "padding: 3px 8px; font-size: 9px; font-weight: 900;"
+        )
         self.name_label.setText(title)
-        self.details_label.setText(details)
+        self.name_label.setStyleSheet(f"color: {accent};")
+        while self.rows_layout.count():
+            item = self.rows_layout.takeAt(0)
+            if item.widget() is not None:
+                item.widget().deleteLater()
+        for row, line in enumerate(lines[1:]):
+            parts = re.split(r"\s{2,}", line, maxsplit=1)
+            key = parts[0]
+            value = parts[1] if len(parts) > 1 else "—"
+            key_label = QtWidgets.QLabel(key.upper())
+            key_label.setObjectName("objectDataKey")
+            value_label = QtWidgets.QLabel(value)
+            value_label.setObjectName("objectDataValue")
+            value_label.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
+            value_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight)
+            self.rows_layout.addWidget(key_label, row, 0)
+            self.rows_layout.addWidget(value_label, row, 1)
+        self.rows_layout.setColumnStretch(1, 1)
+        self.adjustSize()
         self.show()
         self.raise_()
-        self.activateWindow()
+
+    def move_clamped(self, position: QtCore.QPoint) -> None:
+        parent = self.parentWidget()
+        if parent is None:
+            return
+        x = max(8, min(position.x(), parent.width() - self.width() - 8))
+        y = max(8, min(position.y(), parent.height() - self.height() - 8))
+        self.move(x, y)
 
 
 class MissionViewerWidget(QtWidgets.QWidget):
@@ -541,7 +622,7 @@ class MissionViewerWidget(QtWidgets.QWidget):
             telemetry_grid.addWidget(value_label, row, 1)
         panel_layout.addLayout(telemetry_grid)
 
-        self.object_dialog = ObjectDetailsDialog(self)
+        self.object_panel = ObjectDetailsPanel(self)
         self.view.objectSelected.connect(self._inspect_object)
 
         panel_layout.addWidget(self._section_label("CAMERA"))
@@ -624,7 +705,17 @@ class MissionViewerWidget(QtWidgets.QWidget):
 
     @QtCore.Slot(str, str)
     def _inspect_object(self, title: str, details: str) -> None:
-        self.object_dialog.show_object(title, details)
+        was_hidden = not self.object_panel.isVisible()
+        self.object_panel.show_object(title, details)
+        if was_hidden:
+            position = self.view.mapTo(
+                self,
+                QtCore.QPoint(
+                    max(18, self.view.width() - self.object_panel.width() - 18),
+                    18,
+                ),
+            )
+            self.object_panel.move_clamped(position)
 
     @QtCore.Slot(int)
     def _set_mission(self, index: int) -> None:
@@ -635,8 +726,13 @@ class MissionViewerWidget(QtWidgets.QWidget):
         self.view.set_mission(self.mission)
         self._update_telemetry_static()
         self._render_time()
-        self.object_dialog.hide()
+        self.object_panel.hide()
         QtCore.QTimer.singleShot(0, self.view.focus_mission)
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
+        super().resizeEvent(event)
+        if hasattr(self, "object_panel") and self.object_panel.isVisible():
+            self.object_panel.move_clamped(self.object_panel.pos())
 
     def _update_telemetry_static(self) -> None:
         mission = self.mission
@@ -750,10 +846,16 @@ QLabel#phaseLabel { color: #071015; background: #52d6ec; border-radius: 4px; pad
 QLabel#elapsedLabel, QLabel#telemetryKey { color: #778a9f; font-size: 11px; }
 QLabel#telemetryValue { color: #e0e9f2; font-size: 11px; font-weight: 650; }
 QLabel#helpText, QLabel#legend { color: #63758a; font-size: 9px; line-height: 1.4; }
-QDialog { background: #0d141e; }
-QLabel#objectEyebrow { color: #52d6ec; font-size: 9px; font-weight: 800; letter-spacing: 1.5px; }
-QLabel#objectName { color: #f0f6fc; font-size: 24px; font-weight: 800; }
-QLabel#objectDetails { color: #b5c5d4; background: #080e15; border: 1px solid #263446; border-radius: 8px; padding: 14px; font-family: "SF Mono", monospace; font-size: 11px; }
+QFrame#objectPanel { background: #0d1621; border: 1px solid #365069; border-radius: 10px; }
+QFrame#objectPanelHeader { background: #132231; border: 0; border-bottom: 1px solid #2b4054; border-top-left-radius: 9px; border-top-right-radius: 9px; }
+QLabel#dragMark { color: #557087; font-size: 16px; border: 0; }
+QLabel#objectPanelHeading { color: #9cb0c2; font-size: 9px; font-weight: 900; letter-spacing: 1.4px; border: 0; }
+QPushButton#panelClose { color: #7890a5; background: transparent; border: 0; font-size: 20px; font-weight: 500; padding: 0; }
+QPushButton#panelClose:hover { color: #ffffff; background: #263b4e; }
+QLabel#objectType { max-width: 170px; }
+QLabel#objectName { font-size: 25px; font-weight: 850; padding-bottom: 4px; }
+QLabel#objectDataKey { color: #688096; font-size: 9px; font-weight: 800; letter-spacing: 0.7px; }
+QLabel#objectDataValue { color: #e0e9f2; font-family: "SF Mono", monospace; font-size: 11px; font-weight: 650; }
 QLineEdit { background: #0a1018; border: 1px solid #2b3d52; border-radius: 7px; padding: 8px 10px; color: #e7f0fa; selection-background-color: #1b4e63; }
 QLineEdit:focus { border-color: #52d6ec; }
 QListWidget#missionList { background: #090f17; border: 1px solid #263446; border-radius: 7px; outline: none; padding: 4px; }
