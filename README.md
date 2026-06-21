@@ -74,6 +74,14 @@ python -m app.web
 python -m app.neo_viewer_qt data/latest_intercepts.json
 ```
 
+If the launcher opens but the 3D viewer does not, reinstall the desktop extras in the same active environment and try again:
+
+```bash
+python -m pip install -e ".[desktop]"
+```
+
+The launcher surfaces the viewer's startup error and dependency command if the child process exits unexpectedly.
+
 ## Configuration
 
 All operational settings live in `.env`; `.env.example` documents every supported value.

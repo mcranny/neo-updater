@@ -21,6 +21,10 @@ class Launchpad(QtWidgets.QMainWindow):
         self.dashboard_process = QtCore.QProcess(self)
         self.update_process = QtCore.QProcess(self)
         self.viewer_process = QtCore.QProcess(self)
+        self.viewer_error_log = ""
+        self.viewer_failure_shown = False
+        self.closing = False
+        self.restarting_viewer = False
         self.setWindowTitle("Asteroid Intercept Planner")
         self.setMinimumSize(880, 570)
         self._build_ui()
@@ -113,6 +117,10 @@ class Launchpad(QtWidgets.QMainWindow):
         self.update_process.readyReadStandardError.connect(
             lambda: self._capture_process_error(self.update_process)
         )
+        self.viewer_process.started.connect(self._viewer_started)
+        self.viewer_process.readyReadStandardError.connect(self._capture_viewer_error)
+        self.viewer_process.errorOccurred.connect(self._viewer_process_error)
+        self.viewer_process.finished.connect(self._viewer_finished)
 
     def _process_environment(self) -> QtCore.QProcessEnvironment:
         environment = QtCore.QProcessEnvironment.systemEnvironment()
@@ -150,6 +158,13 @@ class Launchpad(QtWidgets.QMainWindow):
 
     @QtCore.Slot()
     def start_viewer(self) -> None:
+        if self.viewer_process.state() != QtCore.QProcess.ProcessState.NotRunning:
+            self.restarting_viewer = True
+            self.viewer_process.terminate()
+            if not self.viewer_process.waitForFinished(1500):
+                self.viewer_process.kill()
+                self.viewer_process.waitForFinished(1000)
+            self.restarting_viewer = False
         try:
             export = export_viewer_json(self.settings.export_path, self.settings.database_path)
             if export.stat().st_size < 100:
@@ -157,8 +172,60 @@ class Launchpad(QtWidgets.QMainWindow):
         except Exception as error:
             QtWidgets.QMessageBox.warning(self, "Viewer unavailable", str(error))
             return
+        self.viewer_error_log = ""
+        self.viewer_failure_shown = False
+        self.status_label.setText("Starting the 3D orbit viewer…")
         self._start_module(self.viewer_process, "app.neo_viewer_qt", [str(export)])
-        self.status_label.setText("Orbit viewer launched.")
+        if not self.viewer_process.waitForStarted(3000):
+            self._show_viewer_failure(
+                f"The viewer process could not start.\n\n{self.viewer_process.errorString()}"
+            )
+
+    @QtCore.Slot()
+    def _viewer_started(self) -> None:
+        self.status_label.setText("3D orbit viewer is running in a separate window.")
+
+    @QtCore.Slot()
+    def _capture_viewer_error(self) -> None:
+        message = bytes(self.viewer_process.readAllStandardError()).decode(
+            "utf-8", errors="replace"
+        )
+        if message:
+            self.viewer_error_log = (self.viewer_error_log + message)[-12000:]
+            self.status_label.setToolTip(self.viewer_error_log)
+
+    @QtCore.Slot(QtCore.QProcess.ProcessError)
+    def _viewer_process_error(self, _error: QtCore.QProcess.ProcessError) -> None:
+        if self.closing or self.restarting_viewer:
+            return
+        self._show_viewer_failure(
+            f"The viewer process failed to start.\n\n{self.viewer_process.errorString()}"
+        )
+
+    @QtCore.Slot(int, QtCore.QProcess.ExitStatus)
+    def _viewer_finished(self, exit_code: int, exit_status: QtCore.QProcess.ExitStatus) -> None:
+        if self.closing or self.restarting_viewer:
+            return
+        crashed = exit_status == QtCore.QProcess.ExitStatus.CrashExit or exit_code != 0
+        if crashed:
+            details = self.viewer_error_log.strip() or self.viewer_process.errorString()
+            self._show_viewer_failure(f"The viewer exited during startup.\n\n{details[-3500:]}")
+        else:
+            self.status_label.setText("3D orbit viewer closed.")
+
+    def _show_viewer_failure(self, details: str) -> None:
+        if self.viewer_failure_shown:
+            return
+        self.viewer_failure_shown = True
+        self.status_label.setText("3D orbit viewer failed to start.")
+        QtWidgets.QMessageBox.critical(
+            self,
+            "3D viewer could not start",
+            f"{details}\n\n"
+            "Reinstall the desktop dependencies in the same environment used "
+            "to launch this window:\n\n"
+            'python -m pip install -e ".[desktop]"',
+        )
 
     @QtCore.Slot()
     def start_update(self) -> None:
@@ -192,9 +259,14 @@ class Launchpad(QtWidgets.QMainWindow):
         )
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
+        self.closing = True
         if self.dashboard_process.state() != QtCore.QProcess.ProcessState.NotRunning:
             self.dashboard_process.terminate()
             self.dashboard_process.waitForFinished(1500)
+        if self.viewer_process.state() != QtCore.QProcess.ProcessState.NotRunning:
+            self.viewer_process.terminate()
+            if not self.viewer_process.waitForFinished(1500):
+                self.viewer_process.kill()
         super().closeEvent(event)
 
 

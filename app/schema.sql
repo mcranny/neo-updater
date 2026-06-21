@@ -1,4 +1,5 @@
 PRAGMA foreign_keys = ON;
+PRAGMA user_version = 2;
 
 CREATE TABLE IF NOT EXISTS ingestion_runs (
     run_id INTEGER PRIMARY KEY AUTOINCREMENT,

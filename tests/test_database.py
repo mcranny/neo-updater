@@ -39,6 +39,14 @@ def test_schema_import_and_export_are_idempotent(tmp_path, sample_payload):
     ]
 
 
+def test_reopening_initialized_database_does_not_rewrite_it(tmp_path):
+    database = tmp_path / "asteroids.db"
+    initialize_database(database)
+    initial_bytes = database.read_bytes()
+    initialize_database(database)
+    assert database.read_bytes() == initial_bytes
+
+
 def test_readonly_query_rejects_mutations(tmp_path, sample_payload):
     database = tmp_path / "asteroids.db"
     upsert_payload(sample_payload, database)
