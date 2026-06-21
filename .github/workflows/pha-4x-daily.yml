@@ -6,34 +6,27 @@ on:
     - cron: "0 0,6,12,18 * * *"
   workflow_dispatch:
     inputs:
-      lambert:
-        description: "Use SBDB elements + Lambert"
-        type: boolean
-        default: false
+      tof_min:
+        description: "Minimum TOF to search (days)"
+        type: number
+        default: 30
         required: false
-      depart_utc:
-        description: "Lambert departure UTC (ISO). Empty = now"
-        type: string
-        required: false
-      tof_days:
-        description: "Lambert time of flight (days)"
+      tof_max:
+        description: "Maximum TOF to search (days)"
         type: number
         default: 180
         required: false
 
 permissions:
-  contents: write  # needed to push updated JSON
+  contents: write
 
 concurrency:
   group: pha-updater
   cancel-in-progress: false
 
 env:
-  OUT_FILE: data/hazardous_neos/latest.json
-  NASA_API_KEY: ${{ secrets.NASA_API_KEY }}
-  # Set to 'true' to force Lambert on scheduled runs (otherwise only when dispatch input is true)
-  LAMBERT: "false"
-  TOF_DAYS_DEFAULT: "180"
+  OUT_FILE:  data/hazardous_neos/latest.json
+  XFER_FILE: data/hazardous_neos/latest_intercepts.json
 
 jobs:
   update:
@@ -54,50 +47,46 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
 
-      - name: Update hazardous NEO snapshot (NeoWs)
+      # ---- Step 1: fetch NEO close approaches + SBDB orbital elements ----
+      # Bug fix: was update_hazardous_neos.py (NeoWs feed — no orbital elements).
+      # Switched to update_close_approaches.py which fetches from JPL CAD + SBDB
+      # and embeds full Keplerian elements needed by the Lambert planner.
+      - name: Fetch close approaches (CAD + SBDB elements)
         env:
-          NASA_API_KEY: ${{ env.NASA_API_KEY }}
           OUT_FILE: ${{ env.OUT_FILE }}
         run: |
-          python -m scripts.update_hazardous_neos
+          python -m scripts.update_close_approaches \
+            --out  "$OUT_FILE" \
+            --date-min now \
+            --date-max +60 \
+            --dist-max 0.05
 
-      # ---- Hohmann baseline (default) ----
-      - name: Plan intercepts (Hohmann baseline)
-        if: ${{ !( (github.event_name == 'workflow_dispatch' && inputs.lambert == true) || env.LAMBERT == 'true' ) }}
-        run: |
-          python -m scripts.neo_intercept_planner \
-            --input  "${{ env.OUT_FILE }}" \
-            --output data/hazardous_neos/latest_intercept.json \
-            --roll-past
-
-      # ---- Elements + Lambert (opt-in) ----
-      - name: Plan intercepts (SBDB elements + Lambert)
-        if: ${{ (github.event_name == 'workflow_dispatch' && inputs.lambert == true) || env.LAMBERT == 'true' }}
+      # ---- Step 2: Lambert transfer planning ----
+      # Bug fix: was neo_intercept_planner.py called with --input/--output/--roll-past
+      # flags that the argparser didn't recognise.  plan_intercepts.py is the
+      # correct Lambert pipeline and uses --inp/--out.
+      - name: Plan intercepts (Lambert grid search)
         env:
-          INPUT_TOF: ${{ inputs.tof_days }}
-          INPUT_DEP: ${{ inputs.depart_utc }}
-          TOF_DEFAULT: ${{ env.TOF_DAYS_DEFAULT }}
+          TOF_MIN: ${{ inputs.tof_min || '30' }}
+          TOF_MAX: ${{ inputs.tof_max || '180' }}
         run: |
-          # choose departure time: provided or "now" in UTC
-          DUTC="${INPUT_DEP:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
-          # choose TOF: provided or default
-          TDays="${INPUT_TOF:-$TOF_DEFAULT}"
+          python -m scripts.plan_intercepts \
+            --inp  "${{ env.OUT_FILE }}" \
+            --out  "${{ env.XFER_FILE }}" \
+            --tof-min "$TOF_MIN" \
+            --tof-max "$TOF_MAX"
 
-          python -m scripts.neo_intercept_planner \
-            --input  "${{ env.OUT_FILE }}" \
-            --output data/hazardous_neos/latest_intercept.json \
-            --roll-past \
-            --elements \
-            --lambert \
-            --depart-utc "${DUTC}" \
-            --tof-days "${TDays}"
+      # ---- Step 3: validate output ----
+      - name: Validate intercept feed
+        run: python -m scripts.validate_feed "${{ env.XFER_FILE }}"
 
+      # ---- Step 4: commit updated JSON ----
       - name: Commit & push if changed
         env:
-          GIT_AUTHOR_NAME: Matthew Cranny
-          GIT_AUTHOR_EMAIL: 163694578+mcranny@users.noreply.github.com
-          GIT_COMMITTER_NAME: Matthew Cranny
-          GIT_COMMITTER_EMAIL: 163694578+mcranny@users.noreply.github.com
+          GIT_AUTHOR_NAME:      Matthew Cranny
+          GIT_AUTHOR_EMAIL:     163694578+mcranny@users.noreply.github.com
+          GIT_COMMITTER_NAME:   Matthew Cranny
+          GIT_COMMITTER_EMAIL:  163694578+mcranny@users.noreply.github.com
         run: |
           set -e
           git config user.name  "$GIT_AUTHOR_NAME"
@@ -109,6 +98,6 @@ jobs:
             exit 0
           fi
 
-          msg="NEO: auto-update $(date -u +'%Y-%m-%d %H:%M UTC')"
+          msg="CI: update hazardous NEO snapshot & intercepts $(date -u +'%Y-%m-%d %H:%MZ')"
           git commit -m "$msg"
           git push origin HEAD:main

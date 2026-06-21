@@ -34,13 +34,72 @@ def mean_motion(a_AU: float) -> float:
     return (max(0.05, a_AU) ** -1.5)
 
 def load_first_plan(path: Path) -> dict:
+    """
+    Load the first NEO plan from a JSON file, handling three output formats:
+
+    Format A — plan_intercepts.py (CAD+SBDB pipeline, preferred):
+        {"objects": [{"des": "...", "intercept": {"lambert_polyline_xy_au": [...],
+                      "tof_days": N, ...}, "elements": {...}}, ...]}
+
+    Format B — neo_intercept_planner.py (new, fixed version):
+        {"objects": [{"lambert_poly_xyz_au": [...], "tof_days": N,
+                      "elements": {...}, "_neo_name": "...", ...}]}
+
+    Format C — legacy NeoWs + Hohmann output:
+        {"potentially_hazardous_neos": [{"intercept_plan": {...}, "name": "..."}]}
+    """
     blob = json.loads(path.read_text(encoding="utf-8"))
+    objects = blob.get("objects") or []
+
+    if objects:
+        obj = objects[0]
+
+        # Format A: plan_intercepts.py — has top-level "intercept" sub-dict
+        if "intercept" in obj and obj["intercept"]:
+            itc = obj["intercept"] or {}
+            el  = obj.get("elements") or {}
+            r2  = float(el.get("a_AU") or el.get("a") or itc.get("r2_AU") or 1.0)
+            return {
+                "lambert_polyline_xy_au": itc.get("lambert_polyline_xy_au"),
+                "tof_days":  float(itc.get("tof_days", 180.0)),
+                "r1_AU":     1.0,
+                "r2_AU":     r2,
+                "elements":  el,
+                "_neo_name": obj.get("des") or obj.get("name") or "Target",
+            }
+
+        # Format B: neo_intercept_planner.py — has "lambert_poly_xyz_au" directly
+        poly_key = next(
+            (k for k in ("lambert_poly_xyz_au", "lambert_polyline_xyz_au",
+                         "lambert_poly", "lambert_polyline_xy_au")
+             if obj.get(k)), None
+        )
+        if poly_key or "target_elements" in obj or "elements" in obj:
+            el  = obj.get("elements") or obj.get("target_elements") or {}
+            r2  = float(el.get("a") or el.get("a_AU") or obj.get("r2_AU") or 1.0)
+            tof = float(obj.get("tof_days") or 180.0)
+            if not tof and obj.get("departure_jd") and obj.get("arrival_jd"):
+                tof = float(obj["arrival_jd"]) - float(obj["departure_jd"])
+            plan = {
+                "lambert_poly_xyz_au": obj.get("lambert_poly_xyz_au"),
+                "lambert_polyline_xy_au": obj.get("lambert_polyline_xy_au"),
+                "tof_days":  tof,
+                "r1_AU":     float(obj.get("r1_AU") or 1.0),
+                "r2_AU":     r2,
+                "elements":  el,
+                "_neo_name": obj.get("_neo_name") or obj.get("des") or obj.get("name") or "Target",
+            }
+            return plan
+
+    # Format C: legacy NeoWs + Hohmann intercept_plan
     items = blob.get("potentially_hazardous_neos") or blob.get("neos") or []
-    if not items: raise RuntimeError("No NEOs found in JSON.")
-    neo = items[0]
-    p = neo.get("intercept_plan") or {}
-    p["_neo_name"] = neo.get("name", "Target")
-    return p
+    if items:
+        neo = items[0]
+        p = dict(neo.get("intercept_plan") or {})
+        p["_neo_name"] = neo.get("name", "Target")
+        return p
+
+    raise RuntimeError(f"No recognisable NEO plan found in {path}")
 
 def _mag_au(val: Any, default: float = 1.0) -> float:
     """
@@ -166,7 +225,11 @@ class Canvas(QGraphicsView):
         self.thetaN0 = (rendez - self.n2 * tof_yrs) % (2*math.pi)
 
         # --- Orientation fix when NO Lambert: apply Δ(Ω+ω) ---
-        no_lambert = not (plan.get("lambert_polyline_xy_au") or plan.get("lambert_polyline_xyz_au") or plan.get("lambert_poly_xyz_au"))
+        # Check all key variants produced by different pipeline stages
+        no_lambert = not (plan.get("lambert_polyline_xy_au")
+                          or plan.get("lambert_polyline_xyz_au")
+                          or plan.get("lambert_poly_xyz_au")
+                          or plan.get("lambert_poly"))
         if no_lambert:
             e = plan.get("elements_earth") or {}
             n = plan.get("elements_target") or plan.get("elements") or {}
@@ -190,8 +253,10 @@ class Canvas(QGraphicsView):
         e = math.sqrt(max(0.0, 1.0 - (b*b)/(a*a)))
         self.a_draw, self.b_draw, self.e_draw = a, b, e
 
-        # Lambert support
-        lam3 = plan.get("lambert_poly_xyz_au") or plan.get("lambert_polyline_xyz_au")
+        # Lambert support — check all key variants (old and new planner output)
+        lam3 = (plan.get("lambert_poly_xyz_au")
+                or plan.get("lambert_polyline_xyz_au")
+                or plan.get("lambert_poly"))   # legacy key from old neo_intercept_planner
         lam2 = plan.get("lambert_polyline_xy_au")
         if lam3:
             pts = [(float(x), float(y)) for (x,y,_) in lam3]
