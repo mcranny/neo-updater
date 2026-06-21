@@ -1,0 +1,3 @@
+{% extends "base.html" %}
+{% block content %}<section class="detail-hero"><p class="eyebrow">404</p><h1>Object not found</h1><p>No asteroid named {{ designation }} exists in the local database.</p><a class="button" href="{{ url_for('index') }}">Return to catalog</a></section>{% endblock %}
+

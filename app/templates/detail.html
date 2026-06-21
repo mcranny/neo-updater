@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}{{ asteroid.designation }} · Asteroid Intercept Planner{% endblock %}
+{% block content %}
+<section class="detail-hero">
+  <a class="back" href="{{ url_for('index') }}">← All objects</a>
+  <p class="eyebrow">NEAR-EARTH OBJECT</p>
+  <h1>{{ asteroid.designation }}</h1>
+  <p>{{ asteroid.fullname or 'JPL small-body designation' }}</p>
+</section>
+
+<section class="detail-grid">
+  <article class="panel">
+    <div class="panel-header"><div><p class="eyebrow">OSCULATING ELEMENTS</p><h2>Orbit</h2></div></div>
+    <dl class="spec-grid">
+      <div><dt>Semi-major axis</dt><dd>{{ asteroid.semi_major_axis_au|number(6) }} AU</dd></div>
+      <div><dt>Eccentricity</dt><dd>{{ asteroid.eccentricity|number(6) }}</dd></div>
+      <div><dt>Inclination</dt><dd>{{ asteroid.inclination_deg|number(4) }}°</dd></div>
+      <div><dt>Longitude of node</dt><dd>{{ asteroid.raan_deg|number(4) }}°</dd></div>
+      <div><dt>Argument of periapsis</dt><dd>{{ asteroid.arg_periapsis_deg|number(4) }}°</dd></div>
+      <div><dt>Earth MOID</dt><dd>{{ asteroid.earth_moid_au|number(6) }} AU</dd></div>
+      <div><dt>Absolute magnitude</dt><dd>{{ asteroid.absolute_magnitude_h|number(2) }}</dd></div>
+      <div><dt>Condition code</dt><dd>{{ asteroid.condition_code or '—' }}</dd></div>
+    </dl>
+  </article>
+  <article class="panel note-card">
+    <p class="eyebrow">MODEL SCOPE</p>
+    <h2>What this estimate means</h2>
+    <p>The planner searches a configurable time-of-flight and arrival-offset grid, solves the heliocentric two-body Lambert problem, and ranks solutions by departure plus arrival velocity mismatch.</p>
+    <p>Planetary perturbations, finite burns, launch windows, navigation uncertainty, and asteroid capture dynamics are outside this model.</p>
+  </article>
+</section>
+
+<section class="panel">
+  <div class="panel-header"><div><p class="eyebrow">HISTORY</p><h2>Approaches and computed transfers</h2></div></div>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Approach</th><th>Miss distance</th><th>TOF</th><th>Departure Δv</th><th>Arrival Δv</th><th>Total Δv</th><th>C3</th></tr></thead>
+    <tbody>{% for row in approaches %}<tr>
+      <td>{{ row.close_approach_text or row.close_approach_jd_tdb }}</td>
+      <td>{{ row.distance_au|number(6) }} AU</td>
+      <td>{{ row.tof_days|number(0) }} days</td>
+      <td>{{ row.departure_dv_kms|number(3) }} km/s</td>
+      <td>{{ row.arrival_dv_kms|number(3) }} km/s</td>
+      <td><strong class="accent">{{ row.total_dv_kms|number(3) }} km/s</strong></td>
+      <td>{{ row.c3_km2_s2|number(2) }} km²/s²</td>
+    </tr>{% endfor %}</tbody>
+  </table></div>
+</section>
+{% endblock %}
+

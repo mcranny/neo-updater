@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}SQL Explorer · Asteroid Intercept Planner{% endblock %}
+{% block content %}
+<section class="detail-hero"><p class="eyebrow">READ-ONLY DATABASE ACCESS</p><h1>SQL explorer</h1><p>Inspect the normalized SQLite dataset without allowing mutations.</p></section>
+<section class="data-grid">
+  <aside class="panel table-list"><h2>Tables & views</h2>{% for table in tables %}<code>{{ table.name }}</code><small>{{ table.type }}</small>{% endfor %}</aside>
+  <section class="panel query-panel">
+    <form method="post">
+      <label for="query">SELECT or WITH query</label>
+      <textarea id="query" name="query" spellcheck="false">{{ query }}</textarea>
+      <div class="actions"><button>Run query</button><button class="secondary" formaction="{{ url_for('export_query') }}">Export CSV</button></div>
+    </form>
+    {% if error %}<p class="error">{{ error }}</p>{% endif %}
+    {% if columns %}<p class="result-count">{{ rows|length }} rows returned</p><div class="table-wrap"><table><thead><tr>{% for column in columns %}<th>{{ column }}</th>{% endfor %}</tr></thead><tbody>{% for row in rows %}<tr>{% for column in columns %}<td>{{ row[column] if row[column] is not none else '—' }}</td>{% endfor %}</tr>{% endfor %}</tbody></table></div>{% endif %}
+  </section>
+</section>
+{% endblock %}
+

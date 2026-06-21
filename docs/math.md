@@ -1,274 +1,168 @@
-# Math & Methods
----
+# Mathematical model and validation
 
-## 1. Units, Frames, Conventions
+This document defines the frames, equations, search procedure, validation checks, and limitations used by Asteroid Intercept Planner.
 
-- **Canonical solar units** for reasoning: AU, year, with $\mu_\odot = 4\pi^2$. Then $P^2 = a^3$ and $n = \dfrac{2\pi}{a^{3/2}}$.
-- **SI** for $\Delta v$ and LEO injection reporting.
-- States are heliocentric in the ecliptic frame; the viewer projects to **XY**.
+## 1. Units and reference frame
 
-Angles are in radians internally; JSON stores degrees where indicated.
+Internal dynamics use SI units:
 
----
+- distance: metres;
+- velocity: metres per second;
+- time: seconds;
+- solar gravitational parameter: `1.32712440018e20 m³/s²`.
 
-## 2. Circular Hohmann (Baseline Sizing)
+Times from JPL are interpreted as TDB Julian dates. Asteroid elements and computed state vectors use the ecliptic J2000 frame. Skyfield's ICRF state is rotated about the x-axis by the J2000 mean obliquity before use.
 
-Given departure radius $r_1$ and target radius $r_2$ (AU):
+## 2. Asteroid state propagation
 
-**Transfer ellipse**
+For semi-major axis `a`, eccentricity `e`, and solar parameter `μ`, the mean motion is
 
-$$
-a_t = \frac{r_1 + r_2}{2}, \qquad
-b_t = \sqrt{r_1 r_2}, \qquad
-e_t = \sqrt{1 - \left(\frac{b_t}{a_t}\right)^2}
-$$
+```text
+n = sqrt(μ / a³).
+```
 
-**Speeds**
+If SBDB provides a mean anomaly `M₀` at epoch `t₀`, then
 
-$$
-v_1 = \sqrt{\mu/r_1}, \qquad
-v_2 = \sqrt{\mu/r_2}, \qquad
-v_p = \sqrt{\mu\!\left(2/r_1 - 1/a_t\right)}, \qquad
-v_a = \sqrt{\mu\!\left(2/r_2 - 1/a_t\right)}
-$$
+```text
+M(t) = wrap₂π(M₀ + n(t - t₀)).
+```
 
-**Sun-centric $\Delta v$**
+If a perihelion epoch `tₚ` is available, the equivalent expression is
 
-$$
-\Delta v_1 = \lvert v_p - v_1 \rvert, \qquad
-\Delta v_2 = \lvert v_2 - v_a \rvert
-$$
+```text
+M(t) = wrap₂π(n(t - tₚ)).
+```
 
-**Time of flight**
+For an elliptical orbit, eccentric anomaly `E` is found with Newton iteration on Kepler's equation:
 
-$$
-\mathrm{TOF} = \pi \sqrt{\frac{a_t^3}{\mu}}
-$$
+```text
+E - e sin(E) = M.
+```
 
-**Viewer phasing (legacy)**
+The perifocal position and velocity are then rotated by `R₃(Ω) R₁(i) R₃(ω)` into ecliptic J2000.
 
-For outward transfers:
+## 3. Earth state
 
-$$
-\theta_T(0) = \pi - n_2 \cdot \mathrm{TOF} \pmod{2\pi}
-$$
+The default `analytic` provider uses standard low-precision J2000 osculating elements and Kepler propagation. This mode is deterministic, small, and suitable for repeatable transfer sizing.
 
-so the target reaches the end of the half-ellipse at TOF.
+With `EPHEMERIS_MODE=skyfield`, the application instead computes Earth's heliocentric state from a JPL Development Ephemeris kernel. `JPL_EPHEMERIS_PATH` can point to a local kernel; otherwise Skyfield obtains `de440s.bsp` through its normal loader.
 
----
+The ephemeris choice materially affects precise departure velocity. Results should always report the selected mode.
 
-## 3. Patched-Conic LEO Escape
+## 4. Lambert formulation
 
-Let $r_L$ be LEO radius and $v_L = \sqrt{\mu_\oplus/r_L}$. With target $v_\infty$ relative to Earth:
+Given departure position **r₁**, arrival position **r₂**, transfer angle `Δθ`, and time of flight `Δt`, define
 
-$$
-\Delta v_{\text{LEO}} = \sqrt{\,v_\infty^2 + \left(\sqrt{2}\,v_L\right)^2\,} - v_L
-$$
+```text
+A = sin(Δθ) sqrt(|r₁||r₂| / (1 - cos(Δθ))).
+```
 
-In baseline Hohmann, $v_\infty \approx \Delta v_1$. This is a sizing-level approximation; real injection depends on parking-orbit geometry, steering losses, and burn strategy.
+The universal-variable solution uses Stumpff functions `C(z)` and `S(z)` and
 
----
+```text
+y(z) = |r₁| + |r₂| + A (z S(z) - 1) / sqrt(C(z)),
 
-## 4. Elements → State Vectors
+F(z) = (y(z) / C(z))^(3/2) S(z) + A sqrt(y(z)) - sqrt(μ) Δt.
+```
 
-Osculating elements at epoch $t_0$: $(a,e,i,\Omega,\omega,M_0)_{t_0}$.
+The code scans the finite single-revolution domain for a sign-changing bracket and then applies bisection. Invalid regions where `y(z) <= 0` are skipped; they are not treated as valid infinite-time samples.
 
-**Mean anomaly at time $t$**
+After obtaining the root,
 
-$$
-M(t) = M_0 + n\,(t - t_0), \qquad n = \sqrt{\frac{\mu}{a^3}}
-$$
+```text
+f    = 1 - y / |r₁|,
+g    = A sqrt(y / μ),
+gdot = 1 - y / |r₂|,
 
-**Kepler’s equation (elliptic)**
+v₁ = (r₂ - f r₁) / g,
+v₂ = (gdot r₂ - r₁) / g.
+```
 
-$$
-M = E - e\sin E
-$$
+Both prograde and retrograde branches are attempted. The first branch that solves and passes validation is eligible for the search.
 
-(Newton: $E_0 = M$ if $e < 0.8$, else $E_0 = \pi$.)
+## 5. Independent endpoint validation
 
-**True anomaly and PQW state**
+Each Lambert departure state is propagated over `Δt` with the universal Kepler equation:
 
-$$
-\nu = 2\arctan\!\Big(\sqrt{\tfrac{1+e}{1-e}}\tan\tfrac{E}{2}\Big), \qquad
-p = a(1-e^2)
-$$
+```text
+F(χ) = (r₀·v₀ / sqrt(μ)) χ² C(αχ²)
+     + (1 - α|r₀|) χ³ S(αχ²)
+     + |r₀|χ - sqrt(μ)Δt,
 
-$$
-\mathbf{r}_{\mathrm{pf}} =
-\begin{bmatrix}
-\dfrac{p\cos\nu}{1+e\cos\nu}\\
-\dfrac{p\sin\nu}{1+e\cos\nu}\\
-0
-\end{bmatrix}
-$$
+α = 2/|r₀| - |v₀|²/μ.
+```
 
-$$
-\mathbf{v}_{\mathrm{pf}} = \sqrt{\dfrac{\mu}{p}}\,
-\begin{bmatrix}
--\sin\nu\\
-e+\cos\nu\\
-0
-\end{bmatrix}
-$$
+The propagated endpoint must agree with the requested **r₂** within
 
-**Rotate PQW→IJK (ecliptic)**
+```text
+max(10 km, 10⁻⁷ |r₂|).
+```
 
-$$
-\mathbf{r} = R_3(\Omega)\,R_1(i)\,R_3(\omega)\,\mathbf{r}_{\mathrm{pf}}
-$$
+This check is intentionally separate from the Lambert time equation. It caught and prevents two subtle implementation errors that can otherwise generate smooth-looking but incorrect transfer curves:
 
-$$
-\mathbf{v} = R_3(\Omega)\,R_1(i)\,R_3(\omega)\,\mathbf{v}_{\mathrm{pf}}
-$$
+1. dividing the Lambert `y(z)` expression by `C(z)` instead of `sqrt(C(z))`; and
+2. using the radial-distance expression as the universal Kepler residual.
 
----
+## 6. Search objective
 
-## 5. Lambert (Universal Variables)
+For each close approach, the application evaluates a configured grid of arrival offsets and times of flight. For a candidate solution,
 
-Given $\mathbf{r}_1$ at $t_1$ and $\mathbf{r}_2$ at $t_2=t_1+\Delta t$, find $\mathbf{v}_1,\mathbf{v}_2$ such that propagation from $(\mathbf{r}_1,\mathbf{v}_1)$ reaches $\mathbf{r}_2$ in $\Delta t$ (short-way **prograde** by default).
+```text
+Δv_depart = |v₁ - v_Earth(t₁)|,
+Δv_arrive = |v_asteroid(t₂) - v₂|,
+Δv_total  = Δv_depart + Δv_arrive.
+```
 
-Geometry:
+The stored plan minimizes `Δv_total` over the sampled grid. This is a rendezvous-style velocity-matching metric, not merely a geometric flyby intercept.
 
-$$
-\Delta\theta=\arccos\!\left(\frac{\mathbf{r}_1\!\cdot\!\mathbf{r}_2}{\lVert\mathbf{r}_1\rVert\,\lVert\mathbf{r}_2\rVert}\right),\qquad
-A=\sin\Delta\theta\,\sqrt{\frac{r_1 r_2}{1-\cos\Delta\theta}}
-$$
+## 7. C3 and parking-orbit estimate
 
-Stumpff functions:
+The heliocentric departure mismatch is treated as an approximate Earth-relative hyperbolic excess speed:
 
-$$
-C(z)=
-\begin{cases}
-\dfrac{1-\cos\sqrt{z}}{z}, & \text{if } z>0,\\
-\dfrac{1}{2}, & \text{if } z=0,\\
-\dfrac{\cosh\sqrt{-z}-1}{-z}, & \text{if } z<0
-\end{cases}
-\qquad
-S(z)=
-\begin{cases}
-\dfrac{\sqrt{z}-\sin\sqrt{z}}{z^{3/2}}, & \text{if } z>0,\\
-\dfrac{1}{6}, & \text{if } z=0,\\
-\dfrac{\sinh\sqrt{-z}-\sqrt{-z}}{(-z)^{3/2}}, & \text{if } z<0
-\end{cases}
-$$
+```text
+C3 ≈ v∞² ≈ Δv_depart².
+```
 
-Define
+For parking-orbit radius `r = R_Earth + h`,
 
-$$
-y(z) = r_1 + r_2 + A \cdot \frac{z S(z) - 1}{C(z)}
-$$
+```text
+v_circular = sqrt(μ_Earth / r),
+v_escape   = sqrt(2 μ_Earth / r),
+Δv_LEO     = sqrt(v∞² + v_escape²) - v_circular.
+```
 
-and solve the scalar equation
+This patched-conic mapping is useful for first-order comparison only. A rigorous Earth-departure design must transform the heliocentric asymptote into the correct geocentric frame and include launch-site and finite-burn constraints.
 
-$$
-F(z)=\left(\frac{y}{C}\right)^{3/2}S + A\sqrt{y} - \sqrt{\mu}\,\Delta t = 0
-$$
+## 8. Automated checks
 
-With the root $z^\*$,
+The test suite verifies:
 
-$$
-f=1-\frac{y}{r_1},\qquad
-g=\frac{A\sqrt{y}}{\sqrt{\mu}},\qquad
-\dot g=1-\frac{y}{r_2}
-$$
+- Kepler-equation residuals;
+- one-period closure of a circular Earth orbit;
+- Lambert propagation to a known Earth-to-Mars-like endpoint;
+- rejection of nonpositive transfer time;
+- idempotent database upserts;
+- foreign-key-compatible viewer export;
+- read-only SQL enforcement; and
+- dashboard, detail, API, and health routes.
 
-and
+## 9. Limitations
 
-$$
-\mathbf{v}_1=\frac{\mathbf{r}_2 - f\,\mathbf{r}_1}{g},\qquad
-\mathbf{v}_2=\frac{\dot g\,\mathbf{r}_2 - \mathbf{r}_1}{g}
-$$
+The current model omits:
 
-**Residual check**: propagate $(\mathbf{r}_1,\mathbf{v}_1)$ by $\Delta t$ (Section 6) and verify $\lVert\mathbf{r}(t_1+\Delta t)-\mathbf{r}_2\rVert$ is within tolerance.
+- n-body and relativistic perturbations;
+- covariance propagation and encounter uncertainty;
+- multi-revolution Lambert branches;
+- continuous launch-window optimization;
+- planetary sphere-of-influence transitions;
+- launch vehicle performance and finite burns;
+- terminal guidance, capture, and proximity operations.
 
----
+The results are appropriate for preliminary comparison, visualization, and software demonstration—not flight decisions.
 
-## 6. Universal-Variable Kepler Propagation
+## References
 
-Given $(\mathbf{r}_0,\mathbf{v}_0)$ and $\Delta t$, define
-
-$$
-\alpha=\frac{2}{\lVert\mathbf{r}_0\rVert}-\frac{\lVert\mathbf{v}_0\rVert^2}{\mu},\qquad z=\alpha\,\chi^2
-$$
-
-Iterate on the universal anomaly $\chi$ using $C(z),S(z)$ to satisfy the time-of-flight equation. Then
-
-$$
-f=1-\frac{\chi^2 C}{\lVert\mathbf{r}_0\rVert},\qquad
-g=\Delta t - \frac{\chi^3 S}{\sqrt{\mu}}
-$$
-
-$$
-\mathbf{r}=f\,\mathbf{r}_0+g\,\mathbf{v}_0,\qquad
-\mathbf{v}=\dot{f}\,\mathbf{r}_0+\dot{g}\,\mathbf{v}_0
-$$
-
-with
-
-$$
-\dot f=\frac{\sqrt{\mu}}{\lVert\mathbf{r}\rVert\,\lVert\mathbf{r}_0\rVert}\,(\,zS-1\,)\,\chi,\qquad
-\dot g=1-\frac{\chi^2 C}{\lVert\mathbf{r}\rVert}
-$$
-
-This works for elliptic, parabolic (limit), and hyperbolic cases.
-
----
-
-## 7. $\Delta v$ Accounting
-
-Let $\mathbf v_\oplus(t_1)$ be Earth’s heliocentric velocity at departure, and $\mathbf v_A(t_2)$ the asteroid’s at arrival.
-
-$$
-\Delta v_{\mathrm{depart}}
-= \sqrt{\,(\mathbf v_1 - \mathbf v_\oplus(t_1))\cdot(\mathbf v_1 - \mathbf v_\oplus(t_1))\,}
-$$
-
-$$
-\Delta v_{\mathrm{arrive}}
-= \sqrt{\,(\mathbf v_2 - \mathbf v_A(t_2))\cdot(\mathbf v_2 - \mathbf v_A(t_2))\,}
-$$
-
-Optionally expose launcher $C_3$ via $C_3 = v_\infty^{2} = (\Delta v_{\mathrm{depart}})^{2}$.
-
-Total mission sizing (simple):
-
-$$
-\Delta v_{\mathrm{mission}} \approx \Delta v_{\mathrm{LEO}} + \Delta v_{\mathrm{arrive}}
-$$
-
----
-
-## 8. Plane-Change Sizing (Future)
-
-For inclination differences $\Delta i$:
-
-- **At node**: $\Delta v_\perp \approx 2v\sin(\Delta i/2)$ at speed $v$.
-- **Split-burn**: divide plane change between departure/arrival to reduce peak cost.
-- **Coupled solves**: include out-of-plane components in Lambert or via DSMs.
-
----
-
-## 9. Window Search (Future)
-
-- Sweep $t_1$ (e.g., $\pm 2$ years) and TOF grid (e.g., 60–360 days).
-- Solve Lambert per sample; record $\Delta v$, $C_3$, constraints.
-- Pareto-filter (Δv, TOF); report top candidates with margins.
-
----
-
-## 10. Validation
-
-- Kepler $M(E,e)=E-e\sin E$; round-trip $E\leftrightarrow\nu$.
-- PQW→IJK rotation orthonormality and inverse consistency.
-- Propagation residual $\lVert\mathbf{r}(t_1+\Delta t)-\mathbf{r}_2\rVert$.
-- JSON schema snapshots and backward-compat loading in the viewer.
-
----
-
-## 11. References
-
-- Prussing & Conway, *Orbital Mechanics*  
-- Battin, *An Introduction to the Mathematics and Methods of Astrodynamics*  
-- Vallado, *Fundamentals of Astrodynamics and Applications*  
-- Izzo, “Revisiting Lambert’s Problem”
+- Bate, Mueller, and White, *Fundamentals of Astrodynamics*.
+- Battin, *An Introduction to the Mathematics and Methods of Astrodynamics*.
+- Vallado, *Fundamentals of Astrodynamics and Applications*.
+- JPL Solar System Dynamics API documentation.
