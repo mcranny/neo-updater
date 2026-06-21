@@ -1,53 +1,71 @@
-# scripts/ephem_earth.py
+"""Earth heliocentric state providers in the ecliptic J2000 frame."""
+
 from __future__ import annotations
-from typing import Tuple, Any
+
+import math
+import os
+from pathlib import Path
+
 import numpy as np
 
-# Obliquity of the ecliptic at J2000 (IAU 2006/2000A)
+from scripts.orbital import AU_M, MU_SUN, deg2rad, kepler_E_from_M, oe_to_rv, wrap_2pi
+
+JD_J2000 = 2451545.0
+DAY_S = 86400.0
 _OBLIQUITY_J2000_DEG = 23.439291111
 
-def _eq_to_ecl_rot() -> np.ndarray:
-    """Rotation matrix: ICRF/Equatorial -> Ecliptic J2000 (R_x(-ε))."""
-    eps = np.deg2rad(_OBLIQUITY_J2000_DEG)
-    c, s = float(np.cos(eps)), float(np.sin(eps))
-    # R_x(-ε) = [[1,0,0],[0, c, s],[0, -s, c]]
-    return np.array([[1.0, 0.0, 0.0],
-                     [0.0,   c,   s],
-                     [0.0,  -s,   c]], dtype=float)
 
-_R_EQ2ECL = _eq_to_ecl_rot()
+def earth_rv_heliocentric_analytic(jd_tdb: float) -> tuple[np.ndarray, np.ndarray]:
+    """Low-precision J2000 Kepler model, suitable for deterministic sizing."""
+    semi_major_axis = 1.00000011 * AU_M
+    eccentricity = 0.01671022
+    inclination = deg2rad(0.00005)
+    longitude_ascending_node = deg2rad(-11.26064)
+    longitude_perihelion = deg2rad(102.94719)
+    argument_perihelion = longitude_perihelion - longitude_ascending_node
+    mean_longitude_j2000 = deg2rad(100.46435)
+    mean_anomaly_j2000 = mean_longitude_j2000 - longitude_perihelion
+    mean_motion = math.sqrt(MU_SUN / semi_major_axis**3)
+    mean_anomaly = wrap_2pi(mean_anomaly_j2000 + mean_motion * (jd_tdb - JD_J2000) * DAY_S)
+    eccentric_anomaly = kepler_E_from_M(mean_anomaly, eccentricity)
+    true_anomaly = 2.0 * math.atan2(
+        math.sqrt(1.0 + eccentricity) * math.sin(eccentric_anomaly / 2.0),
+        math.sqrt(1.0 - eccentricity) * math.cos(eccentric_anomaly / 2.0),
+    )
+    return oe_to_rv(
+        semi_major_axis,
+        eccentricity,
+        inclination,
+        longitude_ascending_node,
+        argument_perihelion,
+        true_anomaly,
+    )
 
-def earth_rv_heliocentric_skyfield(jd_tdb: float) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Return Earth's heliocentric state in **ecliptic J2000**, meters & m/s,
-    using Skyfield + JPL DE ephemeris at TDB Julian Day `jd_tdb`.
-    """
+
+def earth_rv_heliocentric_skyfield(jd_tdb: float) -> tuple[np.ndarray, np.ndarray]:
+    """JPL DE state through Skyfield, rotated from ICRF to ecliptic J2000."""
     from skyfield.api import load
 
-    ts = load.timescale()
-    try:
-        t = ts.tdb_jd(jd_tdb)          # type: ignore[attr-defined]
-    except Exception:
-        t = ts.tdb(jd=jd_tdb)          # type: ignore[attr-defined]
+    timescale = load.timescale()
+    time = timescale.tdb_jd(jd_tdb)
+    configured_path = os.getenv("JPL_EPHEMERIS_PATH", "").strip()
+    ephemeris = (
+        load(str(Path(configured_path).expanduser())) if configured_path else load("de440s.bsp")
+    )
+    relative = ephemeris["earth"].at(time) - ephemeris["sun"].at(time)
+    position_m = np.asarray(relative.position.km, dtype=float) * 1000.0
+    velocity_mps = np.asarray(relative.velocity.km_per_s, dtype=float) * 1000.0
+    epsilon = deg2rad(_OBLIQUITY_J2000_DEG)
+    cosine, sine = math.cos(epsilon), math.sin(epsilon)
+    equatorial_to_ecliptic = np.array([[1.0, 0.0, 0.0], [0.0, cosine, sine], [0.0, -sine, cosine]])
+    return equatorial_to_ecliptic @ position_m, equatorial_to_ecliptic @ velocity_mps
 
-    try:
-        eph = load("de440s.bsp")
-    except Exception:
-        eph = load("de421.bsp")
 
-    e: Any = eph["earth"]
-    s: Any = eph["sun"]
-
-    # Skyfield states are ICRF/Equatorial. Compute Earth wrt Sun, then rotate.
-    rel = e.at(t) - s.at(t)            # type: ignore[attr-defined]
-
-    r_km   = rel.position.km           # type: ignore[attr-defined]
-    v_km_s = rel.velocity.km_per_s     # type: ignore[attr-defined]
-
-    r_m   = np.array(r_km, dtype=float)   * 1000.0
-    v_m_s = np.array(v_km_s, dtype=float) * 1000.0
-
-    # Equatorial -> Ecliptic J2000
-    r_ecl = _R_EQ2ECL @ r_m
-    v_ecl = _R_EQ2ECL @ v_m_s
-    return r_ecl, v_ecl
+def earth_rv(jd_tdb: float) -> tuple[np.ndarray, np.ndarray]:
+    """Select the deterministic analytic model or optional JPL DE ephemeris."""
+    mode = os.getenv("EPHEMERIS_MODE", "analytic").strip().lower()
+    if mode == "skyfield":
+        return earth_rv_heliocentric_skyfield(jd_tdb)
+    if mode != "analytic":
+        raise ValueError("EPHEMERIS_MODE must be 'analytic' or 'skyfield'")
+    return earth_rv_heliocentric_analytic(jd_tdb)

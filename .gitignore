@@ -1,5 +1,8 @@
 # env/editor
 .venv/
+*.egg-info/
+build/
+dist/
 .env
 .vscode/
 .DS_Store
@@ -14,3 +17,11 @@ app/viewer3d.backup.pydata/**/*.json
 *.bsp
 .venv/
 __pycache__/
+.env
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+data/latest_intercepts.json
+data/sbdb_cache/

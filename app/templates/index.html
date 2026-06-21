@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="hero">
+  <div>
+    <p class="eyebrow">LIVE MISSION-DESIGN DATASET</p>
+    <h1>Find close approaches.<br><span>Size an intercept.</span></h1>
+    <p>JPL CAD encounters, SBDB orbital elements, and single-revolution heliocentric Lambert transfers in one queryable database.</p>
+  </div>
+  <div class="run-status">
+    <span class="status-dot {{ 'ok' if latest_run and latest_run.status == 'success' else '' }}"></span>
+    <div><small>Latest ingestion</small><strong>{{ latest_run.finished_at if latest_run else 'No run recorded' }}</strong></div>
+  </div>
+</section>
+
+<section class="metrics">
+  <article><small>Tracked objects</small><strong>{{ stats.asteroid_count or 0 }}</strong></article>
+  <article><small>Close approaches</small><strong>{{ stats.approach_count or 0 }}</strong></article>
+  <article><small>Transfer plans</small><strong>{{ stats.plan_count or 0 }}</strong></article>
+  <article><small>Nearest encounter</small><strong>{{ stats.nearest_distance_au|number(5) }} <em>AU</em></strong></article>
+  <article><small>Lowest Δv found</small><strong>{{ stats.lowest_total_dv_kms|number(2) }} <em>km/s</em></strong></article>
+</section>
+
+<section class="panel">
+  <div class="panel-header">
+    <div><p class="eyebrow">CATALOG</p><h2>Upcoming Earth approaches</h2></div>
+    <form class="search" method="get">
+      <input type="search" name="q" value="{{ search }}" placeholder="Search designation or name">
+      <input type="hidden" name="sort" value="{{ sort }}">
+      <input type="hidden" name="order" value="{{ order }}">
+      <button>Search</button>
+    </form>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr>
+        <th>Object</th><th>Approach (TDB)</th><th>Distance</th><th>Relative speed</th>
+        <th>Orbit</th><th>Best transfer</th>
+      </tr></thead>
+      <tbody>
+      {% for row in rows %}
+        <tr>
+          <td><a class="object-link" href="{{ url_for('asteroid_detail', designation=row.designation) }}">{{ row.designation }}</a><small>{{ row.fullname or '' }}</small></td>
+          <td>{{ row.close_approach_text or row.close_approach_jd_tdb|number(2) }}</td>
+          <td><strong>{{ row.distance_au|number(5) }}</strong> AU</td>
+          <td>{{ row.relative_velocity_kms|number(2) }} km/s</td>
+          <td>e {{ row.eccentricity|number(3) }} · i {{ row.inclination_deg|number(1) }}°</td>
+          <td>{% if row.total_dv_kms is not none %}<strong class="accent">{{ row.total_dv_kms|number(2) }} km/s</strong><small>{{ row.tof_days|number(0) }} days</small>{% else %}<span class="muted">No feasible grid solution</span>{% endif %}</td>
+        </tr>
+      {% else %}
+        <tr><td class="empty" colspan="6">The database is empty. Run <code>python -m app.ingest</code> to populate it.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}
+

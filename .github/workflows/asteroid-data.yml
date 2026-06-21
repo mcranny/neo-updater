@@ -1,0 +1,88 @@
+name: Test and update asteroid database
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "17 0,6,12,18 * * *"
+  workflow_dispatch:
+    inputs:
+      date_max:
+        description: "JPL search-window end (for example +60)"
+        default: "+60"
+        required: false
+      result_limit:
+        description: "Maximum CAD records"
+        default: "100"
+        required: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: asteroid-database-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+      - name: Test
+        run: pytest
+      - name: Lint maintained modules
+        run: >-
+          ruff check app scripts/orbital.py scripts/ephem_earth.py
+          scripts/hud_metrics.py scripts/plan_intercepts.py scripts/sbdb_client.py
+          tests run.py
+
+  update-database:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    needs: test
+    runs-on: ubuntu-latest
+    env:
+      ASTEROID_DATABASE_PATH: data/asteroids.db
+      ASTEROID_VIEWER_EXPORT_PATH: data/latest_intercepts.json
+      JPL_DATE_MIN: now
+      JPL_DATE_MAX: ${{ inputs.date_max || '+60' }}
+      JPL_DISTANCE_MAX_AU: "0.05"
+      JPL_RESULT_LIMIT: ${{ inputs.result_limit || '100' }}
+      INTERCEPT_TOF_MIN_DAYS: "30"
+      INTERCEPT_TOF_MAX_DAYS: "180"
+      INTERCEPT_TOF_STEP_DAYS: "10"
+      INTERCEPT_ARRIVAL_OFFSETS_HOURS: "-12,-6,0,6,12"
+      LEO_ALTITUDE_KM: "500"
+      EPHEMERIS_MODE: analytic
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install runtime
+        run: python -m pip install -e .
+      - name: Fetch, plan, and persist
+        run: python -m app.ingest --print-json
+      - name: Verify SQLite integrity
+        run: >-
+          python -c "import sqlite3;
+          c=sqlite3.connect('data/asteroids.db');
+          assert c.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'"
+      - name: Commit database when changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/asteroids.db
+          if git diff --staged --quiet; then
+            echo "Database unchanged."
+          else
+            git commit -m "data: refresh JPL asteroid catalog"
+            git push
+          fi
+

@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <title>{% block title %}Asteroid Intercept Planner{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="{{ url_for('index') }}">
+        <span class="brand-mark">AIP</span>
+        <span><strong>Asteroid Intercept Planner</strong><small>JPL data · Lambert transfers</small></span>
+      </a>
+      <nav>
+        <a href="{{ url_for('index') }}">Objects</a>
+        <a href="{{ url_for('data_explorer') }}">SQL explorer</a>
+        <a href="{{ url_for('asteroid_api') }}">API</a>
+      </nav>
+    </header>
+    <main>{% block content %}{% endblock %}</main>
+    <footer>Research and mission-design demonstrator. Predictions are not operational navigation products.</footer>
+  </body>
+</html>
+

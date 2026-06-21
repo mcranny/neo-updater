@@ -1,239 +1,137 @@
-# NEO Updater & Intercept Planner
+# Asteroid Intercept Planner
 
-A compact pipeline to:
-- Pull **Potentially Hazardous Asteroids (PHAs)** from NASA **NeoWs**.
-- Write a daily snapshot → `data/hazardous_neos/latest.json`.
-- Plan Earth→NEO transfers:
-  - **Baseline**: circular/coplanar **Hohmann** sizing (default in CI).
-  - **High-fidelity (opt-in)**: **SBDB elements + Lambert** rendezvous.
-- Visualize trajectories locally with a Qt viewer (CI skips Qt).
+A desktop application and automated data pipeline for exploring upcoming asteroid close approaches and sizing preliminary Earth-to-asteroid transfers.
 
-For full derivations and algorithms, see **[docs/math.md](docs/math.md)**.
+The project combines live [JPL Small-Body Database](https://ssd-api.jpl.nasa.gov/doc/sbdb.html) and [Close-Approach Data](https://ssd-api.jpl.nasa.gov/doc/cad.html) with normalized SQLite storage, a searchable Flask dashboard, and a PySide6 transfer viewer. A scheduled GitHub Actions workflow refreshes the database four times per day.
 
----
+> This is a research and portfolio project, not an operational navigation product.
+
+## What it does
+
+- Discovers upcoming Earth close approaches through JPL CAD.
+- Retrieves osculating orbital elements from JPL SBDB.
+- Searches configurable departure and arrival grids.
+- Solves the heliocentric, single-revolution Lambert problem.
+- Rejects solutions that fail an endpoint propagation check.
+- Stores encounters, elements, ingestion history, and transfer plans in SQLite.
+- Presents the catalog through a dark, responsive web dashboard.
+- Provides a read-only SQL explorer, CSV export, and JSON API.
+- Exports database records into the interactive orbit viewer.
+- Launches ingestion, the dashboard, and the viewer from one desktop window.
 
 ## Architecture
 
-    NeoWs (daily) ─┬─▶ data/hazardous_neos/latest.json
-                   │
-                   ├─▶ Hohmann (default CI) ─▶ latest_intercept.json
-                   │
-                   └─▶ +SBDB +Lambert (opt-in) ─▶ latest_intercept.json (adds lambert/*)
+```text
+JPL CAD ── close approaches ─┐
+                            ├─> ingestion ─> SQLite ─┬─> Flask dashboard / API
+JPL SBDB ─ orbital elements ┘                        ├─> read-only SQL / CSV
+                                                     └─> JSON export ─> Qt viewer
+```
 
-- **Updater** — `scripts/update_hazardous_neos.py`  
-  Uses `NASA_API_KEY` (single-day window; `count=0` is normal).
-- **Planner** — `scripts/neo_intercept_planner.py`  
-  Parses NeoWs feed/browse/flat → emits per-NEO `intercept_plan`.  
-  Adds `elements/*`, `lambert/*`, and a `lambert_polyline_xy_au` when enabled.
-- **Viewer** — `app/neo_viewer_qt.py`  
-  Hohmann mode (half-ellipse + phasing) or Lambert mode (polyline; SC rides the arc).
+The database is the source of truth. JSON is now only a portable viewer export; the pipeline no longer uses a collection of competing JSON snapshots.
 
----
+## Quick start
 
-## Install (condensed)
+Python 3.11 or later is required.
 
-- Python **3.10+**
-- Virtual environment recommended
-- Deps: `requests`, `python-dateutil`, `python-dotenv`, `numpy`, `PySide6` (viewer only)
+```bash
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+python -m pip install -e ".[desktop]"
+cp .env.example .env
+python run.py
+```
 
-~~~bash
-python -m venv .venv && source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-~~~
+The launchpad provides three actions:
 
-Optional `.env` for the updater:
-~~~text
-NASA_API_KEY=YOUR_REAL_KEY
-OUT_FILE=data/hazardous_neos/latest.json
-~~~
+1. **Update from JPL** fetches data, computes transfers, and updates SQLite.
+2. **Launch dashboard** starts the local Flask application and opens it in a browser.
+3. **Launch viewer** exports the latest database plans and opens the Qt animation.
 
----
+Individual components can also be run directly:
 
-## Usage
+```bash
+python -m app.ingest --print-json
+python -m app.web
+python -m app.neo_viewer_qt data/latest_intercepts.json
+```
 
-### Baseline Hohmann (default / CI)
-~~~bash
-python -m scripts.update_hazardous_neos
+## Configuration
 
-python -m scripts.neo_intercept_planner \
-  --input  data/hazardous_neos/latest.json \
-  --output data/hazardous_neos/latest_intercept.json \
-  --roll-past
+All operational settings live in `.env`; `.env.example` documents every supported value.
 
-python app/neo_viewer_qt.py
-~~~
+| Variable | Default | Purpose |
+|---|---:|---|
+| `ASTEROID_DATABASE_PATH` | `data/asteroids.db` | SQLite source of truth |
+| `ASTEROID_VIEWER_EXPORT_PATH` | `data/latest_intercepts.json` | Generated viewer payload |
+| `JPL_DATE_MIN` / `JPL_DATE_MAX` | `now` / `+60` | Close-approach window |
+| `JPL_DISTANCE_MAX_AU` | `0.05` | Maximum encounter distance |
+| `JPL_RESULT_LIMIT` | `2000` | CAD response limit |
+| `INTERCEPT_TOF_MIN_DAYS` | `30` | Minimum time of flight |
+| `INTERCEPT_TOF_MAX_DAYS` | `180` | Maximum time of flight |
+| `INTERCEPT_TOF_STEP_DAYS` | `10` | Search-grid spacing |
+| `INTERCEPT_ARRIVAL_OFFSETS_HOURS` | `-12,-6,0,6,12` | Arrival offsets around closest approach |
+| `LEO_ALTITUDE_KM` | `500` | Parking orbit for approximate injection Δv |
+| `EPHEMERIS_MODE` | `analytic` | Deterministic Earth model or `skyfield` |
+| `JPL_EPHEMERIS_PATH` | empty | Optional local JPL DE kernel |
+| `FLASK_HOST` / `FLASK_PORT` | `127.0.0.1` / `5000` | Local dashboard address |
 
-### Elements + Lambert (true rendezvous)
-~~~bash
-python -m scripts.neo_intercept_planner \
-  --input  data/hazardous_neos/latest.json \
-  --output data/hazardous_neos/latest_intercept.json \
-  --roll-past \
-  --elements \
-  --lambert \
-  --depart-utc 2026-01-05T00:00:00Z \
-  --tof-days 180
+No API key is required for the JPL SSD endpoints used by this project. `.env` is ignored by Git.
 
-python app/neo_viewer_qt.py data/hazardous_neos/latest_intercept.json
-~~~
+## Data model
 
-**Selected flags**
-~~~text
---r1-au <float>      Departure heliocentric radius (AU), default 1.0
---r2-au <float>      Override target radius for all NEOs (AU)
---leo-km <float>     Parking altitude for LEO escape model (km)
---roll-past          If arrival is in the past, add synodic periods until future
---elements           Attach SBDB elements (a,e,i,Ω,ω,M at epoch)
---lambert            Single-rev, prograde Lambert between r1(t1) and r2(t2)
---depart-utc <ISO>   Departure epoch for Lambert
---tof-days <float>   Time of flight for Lambert
-~~~
+The normalized database contains:
 
----
+- `asteroids`: stable object identity and physical properties.
+- `orbital_elements`: the latest SBDB osculating solution.
+- `close_approaches`: time, distance, velocity, and uncertainty for each encounter.
+- `intercept_plans`: transfer timing, Δv, C3 approximation, and viewer polyline.
+- `ingestion_runs`: query, status, counts, and errors for every attempted refresh.
+- `latest_asteroid_summary`: dashboard-oriented view joining the latest records.
 
-## Math (essentials)
+Imports use a single immediate transaction and idempotent upserts. Foreign keys and uniqueness constraints prevent partial or duplicate encounter records.
 
-### Units & frame
-- Canonical solar units for reasoning: AU, year, with $\mu_\odot = 4\pi^2$. Then $P^2 = a^3$, $n = 2\pi/a^{3/2}$.
-- SI for $\Delta v$ and LEO injection. Viewer draws the ecliptic-plane XY projection.
+## Automated updates
 
-### Hohmann (circular→circular, coplanar)
-Given heliocentric radii $r_1, r_2$ (AU), transfer ellipse:
+`.github/workflows/asteroid-data.yml` runs tests and linting on pushes and pull requests. On its six-hour schedule—or through manual dispatch—it then:
 
-$$a_t=\tfrac{1}{2}(r_1+r_2),\quad b_t=\sqrt{r_1 r_2},\quad e_t=\sqrt{1-(b_t/a_t)^2}$$
+1. fetches CAD and SBDB data;
+2. computes transfer plans;
+3. updates `data/asteroids.db` transactionally;
+4. runs SQLite's integrity check; and
+5. commits the database only when its contents changed.
 
-Speeds:
+The generated viewer JSON and API caches are deliberately not committed.
 
-$$v_1=\sqrt{\mu/r_1},\quad v_2=\sqrt{\mu/r_2},\quad v_p=\sqrt{\mu(2/r_1-1/a_t)},\quad v_a=\sqrt{\mu(2/r_2-1/a_t)}$$
+## Mathematical model
 
-Δv (Sun-centric):  
+The planner uses osculating two-body elements in the ecliptic J2000 frame and a universal-variable Lambert solver. Every accepted Lambert solution is independently propagated to the requested arrival epoch and must satisfy an endpoint residual threshold.
 
-$$\Delta v_1=\lvert v_p-v_1\rvert,\quad \Delta v_2=\lvert v_2-v_a\rvert$$  
+See [docs/math.md](docs/math.md) for the derivation, frames, assumptions, validation strategy, and interpretation of Δv/C3 values.
 
-Time of flight:  
+## Development
 
-$$\mathrm{TOF}=\pi\sqrt{a_t^3/\mu}$$
+```bash
+python -m pip install -e ".[dev]"
+pytest
+ruff format --check app scripts/orbital.py scripts/ephem_earth.py \
+  scripts/hud_metrics.py scripts/plan_intercepts.py scripts/sbdb_client.py tests run.py
+ruff check app scripts/orbital.py scripts/ephem_earth.py \
+  scripts/hud_metrics.py scripts/plan_intercepts.py scripts/sbdb_client.py tests run.py
+```
 
-**LEO escape (patched conic)** with LEO radius $r_L$, $v_L=\sqrt{\mu_\oplus/r_L}$:
+Tests cover database idempotency, read-only SQL enforcement, Flask routes, Kepler propagation, and Lambert endpoint closure.
 
-$$\Delta v_{\text{LEO}}=\sqrt{v_\infty^2+(\sqrt{2}\,v_L)^2}-v_L,\qquad v_\infty \approx \Delta v_1$$
+## Scope and limitations
 
-**Phasing (viewer legacy):** pick target start angle so it reaches the end of the half-ellipse at $t=\mathrm{TOF}$.
-Outward example:  
+- Transfers are heliocentric, impulsive, two-body, and single-revolution.
+- The search is a configurable grid, not a continuous global optimizer.
+- The default Earth state is a deterministic low-precision J2000 Kepler model.
+- `EPHEMERIS_MODE=skyfield` provides an optional JPL DE Earth state.
+- Asteroid elements are osculating and are not numerically integrated with perturbations.
+- C3 and LEO departure Δv are preliminary patched-conic estimates.
+- No launch vehicle, finite-burn, capture, navigation, or uncertainty design is performed.
 
-$$\theta_T(0)=\pi - n_2 \cdot \mathrm{TOF}\pmod{2\pi}$$
+## License
 
-## Lambert rendezvous (opt-in)
-
-Propagate Earth $\mathbf{r}_\oplus(t_1)$ and NEO $\mathbf{r}_A(t_2)$ from elements.
-
-Solve universal-variables **Lambert** (prograde, single-rev) to get $\mathbf{v}_1,\ \mathbf{v}_2$.
-
-Report:
-
-$$
-\Delta v_{\mathrm{depart}} =
-\sqrt{\left( v_1 - v_\oplus(t_1) \right)\cdot
-      \left( v_1 - v_\oplus(t_1) \right)}
-$$
-
-$$
-\Delta v_{\mathrm{arrive}} =
-\sqrt{\left( v_2 - v_A(t_2) \right)\cdot
-      \left( v_2 - v_A(t_2) \right)}
-$$
-
-
-Optionally expose $C_3 = v_\infty^2$ (future).
-
-The viewer draws the Lambert polyline (XY in AU); the SC rides the arc and intercepts at arrival.
-
-For deeper coverage (Kepler solvers, Stumpff functions, residual checks), see **[docs/math.md](docs/math.md)**.
-
----
-
-## Output schema (subset)
-
-Per NEO (always present):
-~~~json
-{
-  "intercept_plan": {
-    "schema_version": "1.3.0",
-    "r1_AU": 1.0,
-    "r2_AU": 1.23,
-    "tof_days": 184.2,
-    "synodic_days": 398.9,
-    "departure_utc": "YYYY-MM-DDTHH:MM:SSZ",
-    "arrival_utc": "YYYY-MM-DDTHH:MM:SSZ",
-    "rolled_forward": true,
-    "dv_depart_heliocentric_m_s": 3215.4,
-    "dv_arrive_heliocentric_m_s": 1712.8,
-    "dv_from_LEO_m_s": 3940.1,
-    "dv_total_m_s": 5652.9
-  }
-}
-~~~
-
-When `--elements`:
-~~~json
-{
-  "elements": {
-    "a_AU": 1.234,
-    "e": 0.12,
-    "i_deg": 5.8,
-    "raan_deg": 87.3,
-    "argp_deg": 210.4,
-    "M_deg": 14.2,
-    "epoch_utc": "YYYY-MM-DDTHH:MM:SSZ",
-    "source": "JPL SBDB"
-  }
-}
-~~~
-
-When `--lambert`:
-~~~json
-{
-  "lambert": {
-    "t_depart_utc": "YYYY-MM-DDTHH:MM:SSZ",
-    "t_arrive_utc": "YYYY-MM-DDTHH:MM:SSZ",
-    "tof_days": 180.0,
-    "dv_depart_m_s": 3120.2,
-    "dv_arrive_m_s": 1650.8
-  },
-  "lambert_polyline_xy_au": [[x_au, y_au], ...]
-}
-~~~
-
----
-
-## CI
-
-- Workflow: `.github/workflows/pha-4x-daily.yml`
-  - Scheduled at **00/06/12/18 UTC** + `workflow_dispatch`.
-  - Default job = Hohmann (back-compat).
-  - Enable **elements + Lambert** via dispatch inputs or set `env.LAMBERT="true"`.
-
----
-
-## Limits
-
-- Two-body dynamics; no third-body/J2/finite-burn effects.
-- Lambert search: prograde, single-rev (no multi-rev/window scan yet).
-- Earth departure uses circular 1 AU for sizing; launcher C3 mapping is approximate.
-- Arrival models heliocentric matching; micro-SOI capture not included.
-
----
-
-## Validation
-
-- Kepler \(E(M,e)\) and frame rotations (PQW→IJK).
-- Universal-variable propagation residuals.
-- Lambert residual \( \|\mathbf{r}(t_1+\Delta t)-\mathbf{r}_2\| \).
-- JSON schema snapshots.
-
----
-
-## References
-
-Prussing & Conway; Battin; Vallado; Izzo (“Revisiting Lambert’s Problem”).
+MIT
