@@ -344,6 +344,50 @@ class SolarSystemView(gl.GLViewWidget):
         )
 
 
+class ObjectDetailsDialog(QtWidgets.QDialog):
+    """Non-modal detail card for the selected solar-system object."""
+
+    def __init__(self, parent: QtWidgets.QWidget) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Object Details")
+        self.setWindowFlag(QtCore.Qt.WindowType.Tool, True)
+        self.setModal(False)
+        self.setMinimumWidth(390)
+        self.resize(430, 300)
+
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(22, 20, 22, 18)
+        layout.setSpacing(10)
+        eyebrow = QtWidgets.QLabel("SOLAR-SYSTEM OBJECT")
+        eyebrow.setObjectName("objectEyebrow")
+        self.name_label = QtWidgets.QLabel()
+        self.name_label.setObjectName("objectName")
+        self.details_label = QtWidgets.QLabel()
+        self.details_label.setObjectName("objectDetails")
+        self.details_label.setTextInteractionFlags(
+            QtCore.Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        self.details_label.setWordWrap(True)
+        close_button = QtWidgets.QPushButton("Close")
+        close_button.setObjectName("secondaryButton")
+        close_button.clicked.connect(self.hide)
+        button_row = QtWidgets.QHBoxLayout()
+        button_row.addStretch(1)
+        button_row.addWidget(close_button)
+        layout.addWidget(eyebrow)
+        layout.addWidget(self.name_label)
+        layout.addWidget(self.details_label, 1)
+        layout.addLayout(button_row)
+
+    def show_object(self, title: str, details: str) -> None:
+        self.setWindowTitle(f"Object Details — {title}")
+        self.name_label.setText(title)
+        self.details_label.setText(details)
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+
 class MissionViewerWidget(QtWidgets.QWidget):
     TIMER_INTERVAL_MS = 33
 
@@ -386,10 +430,10 @@ class MissionViewerWidget(QtWidgets.QWidget):
         panel = QtWidgets.QFrame()
         panel.setObjectName("controlPanel")
         panel.setMinimumWidth(350)
-        panel.setMaximumWidth(430)
+        panel.setMaximumWidth(410)
         panel_layout = QtWidgets.QVBoxLayout(panel)
-        panel_layout.setContentsMargins(24, 24, 24, 22)
-        panel_layout.setSpacing(14)
+        panel_layout.setContentsMargins(20, 16, 20, 14)
+        panel_layout.setSpacing(8)
 
         eyebrow = QtWidgets.QLabel("MISSION CONTROL")
         eyebrow.setObjectName("eyebrow")
@@ -407,8 +451,8 @@ class MissionViewerWidget(QtWidgets.QWidget):
 
         self.mission_list = QtWidgets.QListWidget()
         self.mission_list.setObjectName("missionList")
-        self.mission_list.setMaximumHeight(190)
-        self.mission_list.setSpacing(3)
+        self.mission_list.setMaximumHeight(142)
+        self.mission_list.setSpacing(2)
         for index, mission in enumerate(self.missions):
             item = QtWidgets.QListWidgetItem(
                 f"{mission.designation}    Δv {mission.total_dv_kms:.2f} km/s\n"
@@ -416,7 +460,7 @@ class MissionViewerWidget(QtWidgets.QWidget):
             )
             item.setData(QtCore.Qt.ItemDataRole.UserRole, index)
             item.setToolTip(mission.name)
-            item.setSizeHint(QtCore.QSize(0, 48))
+            item.setSizeHint(QtCore.QSize(0, 44))
             self.mission_list.addItem(item)
         self.mission_list.currentItemChanged.connect(self._mission_item_changed)
         panel_layout.addWidget(self.mission_list)
@@ -475,7 +519,7 @@ class MissionViewerWidget(QtWidgets.QWidget):
         self.telemetry: dict[str, QtWidgets.QLabel] = {}
         telemetry_grid = QtWidgets.QGridLayout()
         telemetry_grid.setHorizontalSpacing(18)
-        telemetry_grid.setVerticalSpacing(10)
+        telemetry_grid.setVerticalSpacing(5)
         for row, (key, title_text) in enumerate(
             (
                 ("target", "Target"),
@@ -497,17 +541,7 @@ class MissionViewerWidget(QtWidgets.QWidget):
             telemetry_grid.addWidget(value_label, row, 1)
         panel_layout.addLayout(telemetry_grid)
 
-        panel_layout.addWidget(self._section_label("OBJECT INSPECTOR"))
-        self.inspector_name = QtWidgets.QLabel("Select a solar-system object")
-        self.inspector_name.setObjectName("inspectorName")
-        self.inspector_details = QtWidgets.QLabel(
-            "Left-click the Sun, a planet, the target NEO, or the spacecraft to inspect it."
-        )
-        self.inspector_details.setObjectName("inspectorDetails")
-        self.inspector_details.setWordWrap(True)
-        self.inspector_details.setMinimumHeight(96)
-        panel_layout.addWidget(self.inspector_name)
-        panel_layout.addWidget(self.inspector_details)
+        self.object_dialog = ObjectDetailsDialog(self)
         self.view.objectSelected.connect(self._inspect_object)
 
         panel_layout.addWidget(self._section_label("CAMERA"))
@@ -548,17 +582,7 @@ class MissionViewerWidget(QtWidgets.QWidget):
         legend.setObjectName("legend")
         legend.setWordWrap(True)
         panel_layout.addWidget(legend)
-        panel_layout.addStretch(1)
-
-        panel_scroll = QtWidgets.QScrollArea()
-        panel_scroll.setObjectName("panelScroll")
-        panel_scroll.setWidgetResizable(True)
-        panel_scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
-        panel_scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        panel_scroll.setWidget(panel)
-        panel_scroll.setMinimumWidth(370)
-        panel_scroll.setMaximumWidth(430)
-        splitter.addWidget(panel_scroll)
+        splitter.addWidget(panel)
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 0)
         splitter.setSizes([1080, 380])
@@ -600,8 +624,7 @@ class MissionViewerWidget(QtWidgets.QWidget):
 
     @QtCore.Slot(str, str)
     def _inspect_object(self, title: str, details: str) -> None:
-        self.inspector_name.setText(title)
-        self.inspector_details.setText(details)
+        self.object_dialog.show_object(title, details)
 
     @QtCore.Slot(int)
     def _set_mission(self, index: int) -> None:
@@ -612,10 +635,7 @@ class MissionViewerWidget(QtWidgets.QWidget):
         self.view.set_mission(self.mission)
         self._update_telemetry_static()
         self._render_time()
-        self.inspector_name.setText("Select a solar-system object")
-        self.inspector_details.setText(
-            "Left-click the Sun, a planet, the target NEO, or the spacecraft to inspect it."
-        )
+        self.object_dialog.hide()
         QtCore.QTimer.singleShot(0, self.view.focus_mission)
 
     def _update_telemetry_static(self) -> None:
@@ -730,15 +750,16 @@ QLabel#phaseLabel { color: #071015; background: #52d6ec; border-radius: 4px; pad
 QLabel#elapsedLabel, QLabel#telemetryKey { color: #778a9f; font-size: 11px; }
 QLabel#telemetryValue { color: #e0e9f2; font-size: 11px; font-weight: 650; }
 QLabel#helpText, QLabel#legend { color: #63758a; font-size: 9px; line-height: 1.4; }
-QLabel#inspectorName { color: #52d6ec; font-size: 17px; font-weight: 800; }
-QLabel#inspectorDetails { color: #a7b7c8; background: #0a1018; border: 1px solid #263446; border-radius: 7px; padding: 10px; font-family: "SF Mono", monospace; font-size: 10px; }
+QDialog { background: #0d141e; }
+QLabel#objectEyebrow { color: #52d6ec; font-size: 9px; font-weight: 800; letter-spacing: 1.5px; }
+QLabel#objectName { color: #f0f6fc; font-size: 24px; font-weight: 800; }
+QLabel#objectDetails { color: #b5c5d4; background: #080e15; border: 1px solid #263446; border-radius: 8px; padding: 14px; font-family: "SF Mono", monospace; font-size: 11px; }
 QLineEdit { background: #0a1018; border: 1px solid #2b3d52; border-radius: 7px; padding: 8px 10px; color: #e7f0fa; selection-background-color: #1b4e63; }
 QLineEdit:focus { border-color: #52d6ec; }
 QListWidget#missionList { background: #090f17; border: 1px solid #263446; border-radius: 7px; outline: none; padding: 4px; }
 QListWidget#missionList::item { color: #9eb0c2; background: #101925; border: 1px solid transparent; border-radius: 6px; padding: 6px 9px; }
 QListWidget#missionList::item:hover { border-color: #34506b; color: #eef6fc; }
 QListWidget#missionList::item:selected { background: #123345; border-color: #52d6ec; color: #ffffff; }
-QScrollArea#panelScroll { background: #0d141e; border: 0; }
 QComboBox { background: #111c29; border: 1px solid #2b3d52; border-radius: 7px; padding: 9px 10px; color: #e7f0fa; }
 QComboBox::drop-down { border: 0; width: 24px; }
 QComboBox QAbstractItemView { background: #111c29; selection-background-color: #1b4e63; color: #e7f0fa; }

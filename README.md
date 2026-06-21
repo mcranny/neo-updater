@@ -49,7 +49,7 @@ The application opens directly with two tabs:
 1. **Mission Viewer** contains the animated 3D solar system and interception controls.
 2. **Data Explorer** contains the searchable catalog and read-only SQLite query workspace.
 
-**Update from JPL** refreshes the database and mission plans. **Open browser fallback** keeps the Flask version available when a browser is more convenient.
+The integrated **Update from JPL** control refreshes the database and mission plans. A subdued **Browser version** link keeps the Flask interface available as a fallback.
 
 ![Native SQLite data explorer](docs/data-explorer.png)
 
@@ -62,7 +62,7 @@ The viewer is modeled after a spaceflight map screen rather than a decorative an
 - Search and select any stored interception from the mission cards in the side panel.
 - Watch the date, elapsed mission time, spacecraft coordinates, Δv, C3, and encounter metrics.
 - Left-drag to pan in the viewing plane, right-drag to orbit, middle-drag to pan vertically, and use the wheel to zoom.
-- Left-click the Sun, planets, target NEO, or spacecraft to inspect its current state.
+- Left-click the Sun, planets, target NEO, or spacecraft to open its current state in a separate, movable detail window.
 - Distinct halos and colors identify Earth, the target NEO, and the intercept spacecraft at a glance.
 - Switch between mission, inner-system, and full-system camera presets.
 - Scrub to any mission time or play continuously at 0.5-100 simulated days per second.

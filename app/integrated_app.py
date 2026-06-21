@@ -83,8 +83,10 @@ class NativeDataExplorer(QtWidgets.QWidget):
         heading_stack.addWidget(subheading)
         heading_row.addLayout(heading_stack)
         heading_row.addStretch(1)
-        refresh_button = QtWidgets.QPushButton("Refresh")
-        browser_button = QtWidgets.QPushButton("Open browser fallback")
+        refresh_button = QtWidgets.QPushButton("Reload local data")
+        refresh_button.setObjectName("secondaryButton")
+        browser_button = QtWidgets.QPushButton("Browser version ↗")
+        browser_button.setObjectName("quietLink")
         refresh_button.clicked.connect(self.refresh)
         browser_button.clicked.connect(self.open_browser)
         heading_row.addWidget(refresh_button)
@@ -139,7 +141,8 @@ class NativeDataExplorer(QtWidgets.QWidget):
         ):
             self.catalog_sort.addItem(label, value)
         self.catalog_sort.currentIndexChanged.connect(self.refresh_catalog)
-        details_button = QtWidgets.QPushButton("Open selected details")
+        details_button = QtWidgets.QPushButton("View selected in browser ↗")
+        details_button.setObjectName("quietLink")
         details_button.clicked.connect(self.open_selected_browser)
         filters.addWidget(self.catalog_search, 1)
         filters.addWidget(self.catalog_sort)
@@ -328,6 +331,24 @@ class IntegratedWindow(QtWidgets.QMainWindow):
         self.setMinimumSize(1220, 780)
         self.resize(1500, 920)
 
+        app_header = QtWidgets.QWidget()
+        app_header.setObjectName("appHeader")
+        header_layout = QtWidgets.QHBoxLayout(app_header)
+        header_layout.setContentsMargins(16, 10, 16, 10)
+        header_layout.setSpacing(12)
+        app_title = QtWidgets.QLabel("ASTEROID INTERCEPT PLANNER")
+        app_title.setObjectName("appTitle")
+        app_context = QtWidgets.QLabel("JPL data · SQLite mission workspace")
+        app_context.setObjectName("appContext")
+        header_layout.addWidget(app_title)
+        header_layout.addWidget(app_context)
+        header_layout.addStretch(1)
+        self.update_button = QtWidgets.QPushButton("↻  Update from JPL")
+        self.update_button.setObjectName("updateButton")
+        self.update_button.clicked.connect(self.update_from_jpl)
+        header_layout.addWidget(self.update_button)
+        self.setMenuWidget(app_header)
+
         self.tabs = QtWidgets.QTabWidget()
         self.tabs.setObjectName("mainTabs")
         self.tabs.setDocumentMode(True)
@@ -340,15 +361,6 @@ class IntegratedWindow(QtWidgets.QMainWindow):
         self.tabs.addTab(self.viewer, "MISSION VIEWER")
         self.tabs.addTab(self.data_explorer, "DATA EXPLORER")
 
-        toolbar = self.addToolBar("Application")
-        toolbar.setObjectName("appToolbar")
-        toolbar.setMovable(False)
-        update_action = toolbar.addAction("Update from JPL")
-        browser_action = toolbar.addAction("Open browser fallback")
-        update_action.triggered.connect(self.update_from_jpl)
-        browser_action.triggered.connect(self.data_explorer.open_browser)
-        self.update_action = update_action
-
         self.update_process.readyReadStandardError.connect(self._capture_update_error)
         self.update_process.finished.connect(self._update_finished)
         self.statusBar().showMessage("Ready — viewer and SQLite explorer are running locally.")
@@ -359,7 +371,8 @@ class IntegratedWindow(QtWidgets.QMainWindow):
         if self.update_process.state() != QtCore.QProcess.ProcessState.NotRunning:
             return
         self.update_errors = ""
-        self.update_action.setEnabled(False)
+        self.update_button.setEnabled(False)
+        self.update_button.setText("Updating JPL data…")
         self.statusBar().showMessage("Fetching JPL data and recomputing interception plans…")
         environment = QtCore.QProcessEnvironment.systemEnvironment()
         environment.insert("PYTHONPATH", str(ROOT_DIR))
@@ -375,7 +388,8 @@ class IntegratedWindow(QtWidgets.QMainWindow):
 
     @QtCore.Slot(int, QtCore.QProcess.ExitStatus)
     def _update_finished(self, exit_code: int, exit_status: QtCore.QProcess.ExitStatus) -> None:
-        self.update_action.setEnabled(True)
+        self.update_button.setEnabled(True)
+        self.update_button.setText("↻  Update from JPL")
         if exit_code != 0 or exit_status == QtCore.QProcess.ExitStatus.CrashExit:
             QtWidgets.QMessageBox.critical(
                 self,
@@ -405,13 +419,13 @@ class IntegratedWindow(QtWidgets.QMainWindow):
 
 APP_STYLESHEET = """
 QMainWindow, QWidget { background: #070b12; color: #e7f0fa; }
+QWidget#appHeader { background: #0a1018; border-bottom: 1px solid #253446; }
+QLabel#appTitle { color: #eaf4fc; font-size: 12px; font-weight: 900; letter-spacing: 1.4px; }
+QLabel#appContext { color: #62778d; font-size: 10px; }
 QTabWidget#mainTabs::pane, QTabWidget#dataTabs::pane { border: 0; background: #070b12; }
 QTabBar::tab { background: #0d141e; color: #74879c; border: 0; border-right: 1px solid #253446; padding: 12px 26px; font-size: 11px; font-weight: 800; letter-spacing: 1px; }
 QTabBar::tab:selected { color: #071015; background: #52d6ec; }
 QTabBar::tab:hover:!selected { color: #e7f0fa; background: #14202d; }
-QToolBar#appToolbar { background: #0a1018; border-bottom: 1px solid #253446; spacing: 5px; padding: 5px 10px; }
-QToolBar#appToolbar QToolButton { color: #a9bacb; background: #111c29; border: 1px solid #2b3d52; border-radius: 5px; padding: 6px 11px; }
-QToolBar#appToolbar QToolButton:hover { color: #ffffff; border-color: #52d6ec; }
 QStatusBar { color: #778a9f; background: #090f16; border-top: 1px solid #253446; }
 QLabel#dataTitle { color: #f0f6fc; font-size: 24px; font-weight: 800; }
 QLabel#dataSubtitle, QLabel#tableStatus, QLabel#tableHint { color: #718499; font-size: 10px; }
@@ -420,6 +434,12 @@ QLabel#metricName { color: #718499; font-size: 9px; font-weight: 800; letter-spa
 QLabel#metricValue { color: #f0f6fc; font-size: 19px; font-weight: 800; }
 QPushButton { background: #52d6ec; color: #071015; border: 0; border-radius: 6px; padding: 8px 12px; font-weight: 800; }
 QPushButton:hover { background: #78e3f4; }
+QPushButton#updateButton { background: #52d6ec; color: #071015; padding: 9px 16px; }
+QPushButton#updateButton:disabled { background: #183744; color: #76a2af; }
+QPushButton#secondaryButton { background: #111c29; color: #b8c7d5; border: 1px solid #2b3d52; }
+QPushButton#secondaryButton:hover { color: #ffffff; border-color: #52d6ec; }
+QPushButton#quietLink { background: transparent; color: #657a8f; border: 0; padding: 6px 4px; font-size: 10px; font-weight: 600; }
+QPushButton#quietLink:hover { color: #a9bdcf; text-decoration: underline; }
 QLineEdit, QComboBox, QPlainTextEdit { background: #0a1018; border: 1px solid #2b3d52; border-radius: 6px; padding: 7px 9px; color: #e7f0fa; }
 QPlainTextEdit#queryEditor { font-family: "SF Mono", monospace; font-size: 11px; }
 QTableWidget { background: #090f17; alternate-background-color: #0d1621; color: #c4d2df; border: 1px solid #263446; gridline-color: #1d2a3a; selection-background-color: #17475c; selection-color: #ffffff; }
