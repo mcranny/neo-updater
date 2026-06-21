@@ -23,11 +23,14 @@ The project combines live [JPL Small-Body Database](https://ssd-api.jpl.nasa.gov
 
 ## Architecture
 
-```text
-JPL CAD  ── close approaches ─┐
-                              ├─> ingestion ─> SQLite ─┬─> native catalog / SQL
-JPL SBDB ─ orbital elements ──┘                        ├─> Flask fallback / API
-                                                       └─> JSON export ─> 3D viewer
+```mermaid
+flowchart LR
+    CAD[JPL CAD<br/>close approaches] --> ING[ingestion]
+    SBDB[JPL SBDB<br/>orbital elements] --> ING
+    ING --> SQL[(SQLite)]
+    SQL --> NATIVE[native catalog / SQL]
+    SQL --> FLASK[Flask fallback / API]
+    SQL --> JSON[JSON export] --> VIEWER[3D viewer]
 ```
 
 The database is the source of truth. JSON is now only a portable viewer export; the pipeline no longer uses a collection of competing JSON snapshots.
