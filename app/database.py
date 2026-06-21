@@ -39,8 +39,10 @@ def initialize_database(path: Path | None = None) -> Path:
     database_path = Path(path or get_settings().database_path)
     schema = Path(__file__).with_name("schema.sql").read_text(encoding="utf-8")
     with connect(database_path) as connection:
-        connection.executescript(schema)
-        connection.commit()
+        schema_version = int(connection.execute("PRAGMA user_version").fetchone()["user_version"])
+        if schema_version < 2:
+            connection.executescript(schema)
+            connection.commit()
     return database_path
 
 

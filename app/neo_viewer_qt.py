@@ -516,6 +516,10 @@ def main() -> int:
     application.setApplicationName("Asteroid Intercept Planner")
     window = MissionViewer(path)
     window.show()
+    window.raise_()
+    window.activateWindow()
+    QtCore.QTimer.singleShot(0, window.raise_)
+    QtCore.QTimer.singleShot(0, window.activateWindow)
     return application.exec()
 
 
