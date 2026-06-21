@@ -29,7 +29,7 @@ DEFAULT_INTERCEPT = Path("data/latest_intercepts.json")
 class SolarSystemView(gl.GLViewWidget):
     """Map-style OpenGL view using astronomical units for all positions."""
 
-    objectSelected = QtCore.Signal(str, str)
+    objectSelected = QtCore.Signal(str, str, str)
 
     def __init__(self) -> None:
         super().__init__()
@@ -39,6 +39,7 @@ class SolarSystemView(gl.GLViewWidget):
         self.current_jd = 0.0
         self.current_spacecraft = np.zeros(3)
         self.current_asteroid = np.zeros(3)
+        self.inspected_key: str | None = None
         self.object_positions: dict[str, np.ndarray] = {"Sun": np.zeros(3, dtype=float)}
         self._press_position = QtCore.QPointF()
         self._dragged = False
@@ -179,6 +180,14 @@ class SolarSystemView(gl.GLViewWidget):
             self.spacecraft_dot,
         ):
             self.addItem(item)
+        self.inspection_halo = gl.GLScatterPlotItem(
+            pos=np.empty((0, 3), dtype=np.float32),
+            color=(0.84, 0.95, 1.0, 0.24),
+            size=31,
+            pxMode=True,
+        )
+        self.inspection_halo.setDepthValue(-20)
+        self.addItem(self.inspection_halo)
 
     def set_mission(self, mission: Mission) -> None:
         self.mission = mission
@@ -220,6 +229,7 @@ class SolarSystemView(gl.GLViewWidget):
         self.spacecraft_halo.setData(pos=spacecraft.reshape(1, 3))
         self.current_spacecraft = spacecraft
         self.object_positions["Spacecraft"] = spacecraft
+        self._update_inspection_halo()
         return spacecraft
 
     def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:
@@ -247,8 +257,23 @@ class SolarSystemView(gl.GLViewWidget):
             key = self._object_at(event.position())
             if key is not None:
                 title, details = self.object_description(key)
-                self.objectSelected.emit(title, details)
+                self.inspect_object(key)
+                self.objectSelected.emit(key, title, details)
         event.accept()
+
+    def inspect_object(self, key: str) -> None:
+        self.inspected_key = key
+        self._update_inspection_halo()
+
+    def clear_inspected_object(self) -> None:
+        self.inspected_key = None
+        self.inspection_halo.setData(pos=np.empty((0, 3), dtype=np.float32))
+
+    def _update_inspection_halo(self) -> None:
+        if self.inspected_key is None or self.inspected_key not in self.object_positions:
+            return
+        position = self.object_positions[self.inspected_key]
+        self.inspection_halo.setData(pos=position.reshape(1, 3).astype(np.float32))
 
     def _object_at(self, point: QtCore.QPointF) -> str | None:
         """Find the nearest visible marker using stable screen-space projection."""
@@ -377,6 +402,8 @@ class ObjectPanelHeader(QtWidgets.QFrame):
 class ObjectDetailsPanel(QtWidgets.QFrame):
     """Draggable object inspector contained entirely inside the mission viewer."""
 
+    closed = QtCore.Signal()
+
     ACCENTS = {
         "Sun": "#ffe16a",
         "Earth": "#43abff",
@@ -403,7 +430,7 @@ class ObjectDetailsPanel(QtWidgets.QFrame):
         close_button = QtWidgets.QPushButton("×")
         close_button.setObjectName("panelClose")
         close_button.setFixedSize(28, 28)
-        close_button.clicked.connect(self.hide)
+        close_button.clicked.connect(self.close_panel)
         header_layout.addWidget(drag_mark)
         header_layout.addWidget(heading)
         header_layout.addStretch(1)
@@ -456,9 +483,14 @@ class ObjectDetailsPanel(QtWidgets.QFrame):
             self.rows_layout.addWidget(key_label, row, 0)
             self.rows_layout.addWidget(value_label, row, 1)
         self.rows_layout.setColumnStretch(1, 1)
+        self.setMinimumHeight(310 if title == "Intercept spacecraft" else 0)
         self.adjustSize()
         self.show()
         self.raise_()
+
+    def close_panel(self) -> None:
+        self.hide()
+        self.closed.emit()
 
     def move_clamped(self, position: QtCore.QPoint) -> None:
         parent = self.parentWidget()
@@ -624,6 +656,7 @@ class MissionViewerWidget(QtWidgets.QWidget):
 
         self.object_panel = ObjectDetailsPanel(self)
         self.view.objectSelected.connect(self._inspect_object)
+        self.object_panel.closed.connect(self.view.clear_inspected_object)
 
         panel_layout.addWidget(self._section_label("CAMERA"))
         camera_row = QtWidgets.QHBoxLayout()
@@ -703,17 +736,15 @@ class MissionViewerWidget(QtWidgets.QWidget):
             return
         self._set_mission(int(current.data(QtCore.Qt.ItemDataRole.UserRole)))
 
-    @QtCore.Slot(str, str)
-    def _inspect_object(self, title: str, details: str) -> None:
+    @QtCore.Slot(str, str, str)
+    def _inspect_object(self, key: str, title: str, details: str) -> None:
+        self.view.inspect_object(key)
         was_hidden = not self.object_panel.isVisible()
         self.object_panel.show_object(title, details)
         if was_hidden:
             position = self.view.mapTo(
                 self,
-                QtCore.QPoint(
-                    max(18, self.view.width() - self.object_panel.width() - 18),
-                    18,
-                ),
+                QtCore.QPoint(18, 18),
             )
             self.object_panel.move_clamped(position)
 
@@ -727,6 +758,7 @@ class MissionViewerWidget(QtWidgets.QWidget):
         self._update_telemetry_static()
         self._render_time()
         self.object_panel.hide()
+        self.view.clear_inspected_object()
         QtCore.QTimer.singleShot(0, self.view.focus_mission)
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
