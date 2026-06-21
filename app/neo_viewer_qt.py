@@ -1,497 +1,523 @@
-#!/usr/bin/env python3
-"""
-Asteroid Intercept Planner — Qt 2-D transfer viewer
-
-- Accepts 3-D or 2-D Lambert polylines from the planner
-- Correctly orients the target orbit by applying Δ(Ω+ω) between Earth and target
-  when Lambert is NOT provided (so orbits no longer look “same-angled”)
-- With Lambert, anchors Earth to departure heading and phases target to reach
-  the arrival heading at TOF
-
-Usage:
-    python app/neo_viewer_qt.py  [optional_json_path]
-"""
+"""Interactive 3D solar-system mission viewer."""
 
 from __future__ import annotations
 
-import json
-import math
 import sys
 from pathlib import Path
-from typing import Any
 
-from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
-from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPainterPath, QPalette, QPen
-from PySide6.QtWidgets import (
-    QApplication,
-    QGraphicsEllipseItem,
-    QGraphicsPathItem,
-    QGraphicsScene,
-    QGraphicsView,
-    QHBoxLayout,
-    QLabel,
-    QMainWindow,
-    QPushButton,
-    QSlider,
-    QVBoxLayout,
-    QWidget,
+import numpy as np
+import pyqtgraph.opengl as gl
+from PySide6 import QtCore, QtGui, QtWidgets
+
+from app.solar_system import (
+    PLANETS,
+    Mission,
+    asteroid_orbit_curve_au,
+    asteroid_position_au,
+    format_jd,
+    load_missions,
+    orbit_curve_au,
+    planet_elements,
+    planet_position_au,
 )
 
-AU = 1.0
 DEFAULT_INTERCEPT = Path("data/latest_intercepts.json")
 
 
-def mean_motion(a_AU: float) -> float:
-    """rad/year for circularized 2-D rings (relative timing only)."""
-    return max(0.05, a_AU) ** -1.5
+class SolarSystemView(gl.GLViewWidget):
+    """Map-style OpenGL view using astronomical units for all positions."""
 
-
-def load_first_plan(path: Path) -> dict:
-    """
-    Load the first NEO plan from a JSON file, handling three output formats:
-
-    Format A — plan_intercepts.py (CAD+SBDB pipeline, preferred):
-        {"objects": [{"des": "...", "intercept": {"lambert_polyline_xy_au": [...],
-                      "tof_days": N, ...}, "elements": {...}}, ...]}
-
-    Format B — neo_intercept_planner.py (new, fixed version):
-        {"objects": [{"lambert_poly_xyz_au": [...], "tof_days": N,
-                      "elements": {...}, "_neo_name": "...", ...}]}
-
-    Format C — legacy NeoWs + Hohmann output:
-        {"potentially_hazardous_neos": [{"intercept_plan": {...}, "name": "..."}]}
-    """
-    blob = json.loads(path.read_text(encoding="utf-8"))
-    objects = blob.get("objects") or []
-
-    if objects:
-        obj = objects[0]
-
-        # Format A: plan_intercepts.py — has top-level "intercept" sub-dict
-        if "intercept" in obj and obj["intercept"]:
-            itc = obj["intercept"] or {}
-            el = obj.get("elements") or {}
-            r2 = float(el.get("a_AU") or el.get("a") or itc.get("r2_AU") or 1.0)
-            return {
-                "lambert_polyline_xy_au": itc.get("lambert_polyline_xy_au"),
-                "tof_days": float(itc.get("tof_days", 180.0)),
-                "r1_AU": 1.0,
-                "r2_AU": r2,
-                "elements": el,
-                "_neo_name": obj.get("des") or obj.get("name") or "Target",
-            }
-
-        # Format B: neo_intercept_planner.py — has "lambert_poly_xyz_au" directly
-        poly_key = next(
-            (
-                k
-                for k in (
-                    "lambert_poly_xyz_au",
-                    "lambert_polyline_xyz_au",
-                    "lambert_poly",
-                    "lambert_polyline_xy_au",
-                )
-                if obj.get(k)
-            ),
-            None,
-        )
-        if poly_key or "target_elements" in obj or "elements" in obj:
-            el = obj.get("elements") or obj.get("target_elements") or {}
-            r2 = float(el.get("a") or el.get("a_AU") or obj.get("r2_AU") or 1.0)
-            tof = float(obj.get("tof_days") or 180.0)
-            if not tof and obj.get("departure_jd") and obj.get("arrival_jd"):
-                tof = float(obj["arrival_jd"]) - float(obj["departure_jd"])
-            plan = {
-                "lambert_poly_xyz_au": obj.get("lambert_poly_xyz_au"),
-                "lambert_polyline_xy_au": obj.get("lambert_polyline_xy_au"),
-                "tof_days": tof,
-                "r1_AU": float(obj.get("r1_AU") or 1.0),
-                "r2_AU": r2,
-                "elements": el,
-                "_neo_name": obj.get("_neo_name") or obj.get("des") or obj.get("name") or "Target",
-            }
-            return plan
-
-    # Format C: legacy NeoWs + Hohmann intercept_plan
-    items = blob.get("potentially_hazardous_neos") or blob.get("neos") or []
-    if items:
-        neo = items[0]
-        p = dict(neo.get("intercept_plan") or {})
-        p["_neo_name"] = neo.get("name", "Target")
-        return p
-
-    raise RuntimeError(f"No recognisable NEO plan found in {path}")
-
-
-def _mag_au(val: Any, default: float = 1.0) -> float:
-    """
-    Convert a JSON value (float | [x,y] | [x,y,z] | np.ndarray | str) to a scalar AU.
-    Safe for Pylance: all casts are internal; callers get a float.
-    """
-    try:
-        # numpy array path (optional)
-        try:
-            import numpy as _np  # noqa: WPS433 (local import OK)
-
-            if isinstance(val, _np.ndarray):
-                arr = _np.asarray(val, dtype=float).ravel()
-                if arr.size == 0:
-                    return float(default)
-                if arr.size == 1:
-                    return float(arr[0])
-                x = float(arr[0])
-                y = float(arr[1] if arr.size > 1 else 0.0)
-                z = float(arr[2] if arr.size > 2 else 0.0)
-                return float(math.hypot(x, math.hypot(y, z)))
-        except Exception:
-            pass
-
-        # list/tuple path
-        if isinstance(val, (list, tuple)):
-            if not val:
-                return float(default)
-            x = float(val[0])
-            y = float(val[1]) if len(val) > 1 else 0.0
-            z = float(val[2]) if len(val) > 2 else 0.0
-            return float(math.hypot(x, math.hypot(y, z)))
-
-        # scalar path
-        return float(val)
-    except Exception:
-        return float(default)
-
-
-class Canvas(QGraphicsView):
-    def __init__(self, plan: dict):
+    def __init__(self) -> None:
         super().__init__()
-        # Use Qt6-safe RenderHint enum (lints clean)
-        self.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        self.setBackgroundColor((4, 8, 15))
+        self.opts["fov"] = 58
+        self.mission: Mission | None = None
+        self.planet_orbits: dict[str, gl.GLLinePlotItem] = {}
+        self.planet_dots: dict[str, gl.GLScatterPlotItem] = {}
+        self._build_scene()
+        self.show_full_system()
 
-        pal = self.palette()
-        pal.setColor(QPalette.ColorRole.Base, QColor(20, 22, 26))
-        pal.setColor(QPalette.ColorRole.Text, QColor(220, 220, 220))
-        self.setPalette(pal)
+    def _build_scene(self) -> None:
+        grid = gl.GLGridItem()
+        grid.setSize(70, 70)
+        grid.setSpacing(5, 5)
+        grid.setColor((48, 71, 96, 70))
+        grid.setDepthValue(100)
+        self.addItem(grid)
 
-        self._scene = QGraphicsScene(self)
-        self.setScene(self._scene)
-        self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
-
-        # static items
-        self.earthOrbit = QGraphicsEllipseItem()
-        self.neoOrbit = QGraphicsEllipseItem()
-        self.transfer = QGraphicsEllipseItem()  # legacy Hohmann ellipse (hidden in Lambert mode)
-        self.xferFull = QGraphicsPathItem()  # Lambert polyline (full path)
-
-        for it, color, w in [
-            (self.earthOrbit, QColor(70, 180, 255), 2.2),
-            (self.neoOrbit, QColor(160, 255, 140), 2.2),
-            (self.transfer, QColor(245, 200, 120), 2.5),
-        ]:
-            it.setPen(QPen(color, w))
-            it.setBrush(QBrush(Qt.BrushStyle.NoBrush))
-            self._scene.addItem(it)
-
-        self.xferFull.setPen(QPen(QColor(245, 200, 120), 2.5))
-        self._scene.addItem(self.xferFull)
-
-        # moving dots & labels
-        self.earthDot = QGraphicsEllipseItem()
-        self.neoDot = QGraphicsEllipseItem()
-        self.scDot = QGraphicsEllipseItem()
-        for it, color in [
-            (self.earthDot, QColor(70, 180, 255)),
-            (self.neoDot, QColor(160, 255, 140)),
-            (self.scDot, QColor(245, 140, 90)),
-        ]:
-            it.setBrush(QBrush(color))
-            it.setPen(QPen(Qt.PenStyle.NoPen))
-            it.setRect(QRectF(-5, -5, 10, 10))
-            self._scene.addItem(it)
-
-        self.lblEarth = self._mk_label("Earth")
-        self.lblNeo = self._mk_label("Target")
-        self.lblSc = self._mk_label("SC", bold=True)
-        self.note = self._mk_label("", italic=True)
-
-        # trail for SC along Lambert arc
-        self.scTrack = QGraphicsPathItem()
-        self.scTrack.setPen(QPen(QColor(245, 160, 100), 2.0, Qt.PenStyle.DashLine))
-        self._scene.addItem(self.scTrack)
-
-        self.setPlan(plan)
-
-    def _mk_label(self, text, bold=False, italic=False):
-        lbl = self._scene.addSimpleText(text)
-        f = QFont("Inter", 10)
-        f.setBold(bold)
-        f.setItalic(italic)
-        lbl.setFont(f)
-        lbl.setBrush(QBrush(QColor(220, 220, 220)))
-        return lbl
-
-    # --------- plan & geometry ----------
-    def setPlan(self, plan: dict):
-        self.plan = plan
-
-        # radii (this 2-D view uses circularized radii; if vectors are provided, use their magnitude)
-        r1v = plan.get("r1_AU") or plan.get("r1_au") or 1.0
-        r2v = plan.get("r2_AU") or plan.get("r2_au") or 1.0
-        self.r1_phys = _mag_au(r1v, default=1.0)
-        self.r2_phys = _mag_au(r2v, default=1.0)
-
-        self.tof_days = float(plan.get("tof_days", 180.0))
-
-        # mean motions
-        self.n1 = mean_motion(self.r1_phys)
-        self.n2 = mean_motion(self.r2_phys)
-
-        # default legacy phase for target (π if outward, 0 if inward)
-        tof_yrs = self.tof_days / 365.25
-        rendez = math.pi if self.r2_phys >= self.r1_phys else 0.0
-        self.thetaE0 = 0.0
-        self.thetaN0 = (rendez - self.n2 * tof_yrs) % (2 * math.pi)
-
-        # --- Orientation fix when NO Lambert: apply Δ(Ω+ω) ---
-        # Check all key variants produced by different pipeline stages
-        no_lambert = not (
-            plan.get("lambert_polyline_xy_au")
-            or plan.get("lambert_polyline_xyz_au")
-            or plan.get("lambert_poly_xyz_au")
-            or plan.get("lambert_poly")
+        rng = np.random.default_rng(731)
+        direction = rng.normal(size=(1100, 3))
+        direction /= np.linalg.norm(direction, axis=1, keepdims=True)
+        radii = rng.uniform(52.0, 64.0, size=(1100, 1))
+        star_positions = (direction * radii).astype(np.float32)
+        star_alpha = rng.uniform(0.15, 0.65, size=(1100, 1))
+        star_colors = np.hstack([np.full((1100, 3), 0.82), star_alpha]).astype(np.float32)
+        self.stars = gl.GLScatterPlotItem(
+            pos=star_positions, color=star_colors, size=1.2, pxMode=True
         )
-        if no_lambert:
-            e = plan.get("elements_earth") or {}
-            n = plan.get("elements_target") or plan.get("elements") or {}
-            try:
-                L_earth = float(e.get("raan_deg", 0.0)) + float(e.get("argp_deg", 0.0))
-                L_target = float(n.get("raan_deg", 0.0)) + float(n.get("argp_deg", 0.0))
-                dL = (L_target - L_earth) * math.pi / 180.0
-                self.thetaN0 = (self.thetaN0 + dL) % (2 * math.pi)
-            except Exception:
-                pass
+        self.stars.setDepthValue(1000)
+        self.addItem(self.stars)
 
-        # geometry (drawn circles / ellipse)
-        self.r1_draw = self.r1_phys
-        self.r2_draw = self.r2_phys
-        if abs(self.r2_draw - self.r1_draw) < 0.03:
-            self.r2_draw += 0.12  # visual separation only
-            self.note.setText("Note: target ring visually offset for clarity.")
+        self.sun_halo = gl.GLScatterPlotItem(
+            pos=np.zeros((1, 3), dtype=np.float32),
+            color=(1.0, 0.64, 0.10, 0.18),
+            size=36,
+            pxMode=True,
+        )
+        self.sun = gl.GLScatterPlotItem(
+            pos=np.zeros((1, 3), dtype=np.float32),
+            color=(1.0, 0.86, 0.35, 1.0),
+            size=15,
+            pxMode=True,
+        )
+        self.addItem(self.sun_halo)
+        self.addItem(self.sun)
 
-        a = 0.5 * (self.r1_draw + self.r2_draw)
-        b = math.sqrt(max(1e-6, self.r1_draw * self.r2_draw))
-        e = math.sqrt(max(0.0, 1.0 - (b * b) / (a * a)))
-        self.a_draw, self.b_draw, self.e_draw = a, b, e
+        for planet in PLANETS:
+            orbit = gl.GLLinePlotItem(
+                pos=np.empty((0, 3), dtype=np.float32),
+                color=(*planet.color[:3], 0.38),
+                width=1.15,
+                antialias=True,
+                mode="line_strip",
+            )
+            dot = gl.GLScatterPlotItem(
+                pos=np.zeros((1, 3), dtype=np.float32),
+                color=planet.color,
+                size=planet.marker_size,
+                pxMode=True,
+            )
+            self.planet_orbits[planet.name] = orbit
+            self.planet_dots[planet.name] = dot
+            self.addItem(orbit)
+            self.addItem(dot)
 
-        # Lambert support — check all key variants (old and new planner output)
-        lam3 = (
-            plan.get("lambert_poly_xyz_au")
-            or plan.get("lambert_polyline_xyz_au")
-            or plan.get("lambert_poly")
-        )  # legacy key from old neo_intercept_planner
-        lam2 = plan.get("lambert_polyline_xy_au")
-        if lam3:
-            pts = [(float(x), float(y)) for (x, y, _) in lam3]
-        elif lam2:
-            pts = [(float(x), float(y)) for (x, y) in lam2]
-        else:
-            pts = []
-        self.lambert_pts = pts
-        self.use_lambert = len(pts) >= 2
+        self.asteroid_orbit = gl.GLLinePlotItem(
+            pos=np.empty((0, 3), dtype=np.float32),
+            color=(0.40, 1.0, 0.60, 0.62),
+            width=1.8,
+            antialias=True,
+            mode="line_strip",
+        )
+        self.transfer_path = gl.GLLinePlotItem(
+            pos=np.empty((0, 3), dtype=np.float32),
+            color=(1.0, 0.74, 0.27, 0.42),
+            width=2.2,
+            antialias=True,
+            mode="line_strip",
+        )
+        self.transfer_trail = gl.GLLinePlotItem(
+            pos=np.empty((0, 3), dtype=np.float32),
+            color=(1.0, 0.68, 0.20, 1.0),
+            width=3.4,
+            antialias=True,
+            mode="line_strip",
+        )
+        self.asteroid_dot = gl.GLScatterPlotItem(
+            pos=np.zeros((1, 3), dtype=np.float32),
+            color=(0.40, 1.0, 0.60, 1.0),
+            size=9,
+            pxMode=True,
+        )
+        self.spacecraft_dot = gl.GLScatterPlotItem(
+            pos=np.zeros((1, 3), dtype=np.float32),
+            color=(1.0, 0.52, 0.12, 1.0),
+            size=10,
+            pxMode=True,
+        )
+        self.departure_dot = gl.GLScatterPlotItem(
+            pos=np.zeros((1, 3), dtype=np.float32),
+            color=(0.25, 0.72, 1.0, 1.0),
+            size=7,
+            pxMode=True,
+        )
+        self.arrival_dot = gl.GLScatterPlotItem(
+            pos=np.zeros((1, 3), dtype=np.float32),
+            color=(0.40, 1.0, 0.60, 1.0),
+            size=7,
+            pxMode=True,
+        )
+        for item in (
+            self.asteroid_orbit,
+            self.transfer_path,
+            self.transfer_trail,
+            self.departure_dot,
+            self.arrival_dot,
+            self.asteroid_dot,
+            self.spacecraft_dot,
+        ):
+            self.addItem(item)
 
-        if self.use_lambert:
-            th_dep = math.atan2(pts[0][1], pts[0][0])
-            th_arr = math.atan2(pts[-1][1], pts[-1][0])
-            self.thetaE0 = th_dep
-            self.thetaN0 = (th_arr - self.n2 * (self.tof_days / 365.25)) % (2 * math.pi)
+    def set_mission(self, mission: Mission) -> None:
+        self.mission = mission
+        self.asteroid_orbit.setData(pos=asteroid_orbit_curve_au(mission.elements))
+        self.transfer_path.setData(pos=mission.polyline_au)
+        self.transfer_trail.setData(pos=mission.polyline_au[:1])
+        self.departure_dot.setData(pos=mission.polyline_au[:1])
+        self.arrival_dot.setData(pos=mission.polyline_au[-1:])
+        for planet in PLANETS:
+            elements = planet_elements(planet, mission.departure_jd)
+            self.planet_orbits[planet.name].setData(pos=orbit_curve_au(elements))
+        self.update_time(mission.departure_jd, 0.0)
 
-        # draw static geometry
-        self._update_geometry()
+    def update_time(self, jd_tdb: float, progress: float) -> np.ndarray:
+        if self.mission is None:
+            return np.zeros(3)
+        for planet in PLANETS:
+            self.planet_dots[planet.name].setData(
+                pos=planet_position_au(planet, jd_tdb).reshape(1, 3).astype(np.float32)
+            )
+        asteroid_position = asteroid_position_au(self.mission.elements, jd_tdb)
+        self.asteroid_dot.setData(pos=asteroid_position.reshape(1, 3).astype(np.float32))
 
-        # time state
-        self.t_days = 0.0
-        self.playing = False
-        self.speed = 1.0
+        path = self.mission.polyline_au
+        position = max(0.0, min(1.0, progress)) * (len(path) - 1)
+        low = int(position)
+        high = min(low + 1, len(path) - 1)
+        fraction = position - low
+        spacecraft = path[low] * (1.0 - fraction) + path[high] * fraction
+        trail = np.vstack([path[: low + 1], spacecraft]).astype(np.float32)
+        self.transfer_trail.setData(pos=trail)
+        self.spacecraft_dot.setData(pos=spacecraft.reshape(1, 3))
+        return spacecraft
 
-        # precompute arc-length fractions for trail
-        if self.use_lambert:
-            self._lam_s = [0.0]
-            total = 0.0
-            for i in range(1, len(pts)):
-                dx = pts[i][0] - pts[i - 1][0]
-                dy = pts[i][1] - pts[i - 1][1]
-                total += math.hypot(dx, dy)
-                self._lam_s.append(total)
-            if total > 0:
-                self._lam_s = [s / total for s in self._lam_s]
-        else:
-            self._lam_s = None
+    def show_full_system(self) -> None:
+        self.setCameraPosition(
+            pos=QtGui.QVector3D(0.0, 0.0, 0.0), distance=68.0, elevation=62, azimuth=-38
+        )
 
-        self._tick()
+    def show_inner_system(self) -> None:
+        self.setCameraPosition(
+            pos=QtGui.QVector3D(0.0, 0.0, 0.0), distance=5.2, elevation=68, azimuth=-35
+        )
 
-    def _scale(self) -> float:
-        vw = max(self.viewport().width(), 800)
-        vh = max(self.viewport().height(), 500)
-        margin = 80.0
-        R = max(self.r1_draw, self.r2_draw)
-        pix = 0.5 * min(vw, vh) - margin
-        return max(80.0, pix) / max(0.5, R)
-
-    def _update_geometry(self):
-        s = self._scale()
-        r1 = self.r1_draw * s
-        r2 = self.r2_draw * s
-        a = self.a_draw * s
-        b = self.b_draw * s
-        c = self.e_draw * a
-        self.earthOrbit.setRect(QRectF(-r1, -r1, 2 * r1, 2 * r1))
-        self.neoOrbit.setRect(QRectF(-r2, -r2, 2 * r2, 2 * r2))
-        self.transfer.setRect(QRectF(-a + c, -b, 2 * a, 2 * b))
-        self.transfer.setVisible(not self.use_lambert)
-
-        # draw full Lambert path
-        if self.use_lambert:
-            path = QPainterPath(QPointF(self.lambert_pts[0][0] * s, self.lambert_pts[0][1] * s))
-            for x, y in self.lambert_pts[1:]:
-                path.lineTo(QPointF(x * s, y * s))
-            self.xferFull.setPath(path)
-            self.xferFull.setVisible(True)
-        else:
-            self.xferFull.setVisible(False)
-
-    # --------- animation tick ----------
-    def _tick(self):
-        s = self._scale()
-        t_yrs = self.t_days / 365.25
-
-        thetaE = (self.thetaE0 + self.n1 * t_yrs) % (2 * math.pi)
-        thetaN = (self.thetaN0 + self.n2 * t_yrs) % (2 * math.pi)
-
-        x_e = self.r1_draw * s * math.cos(thetaE)
-        y_e = self.r1_draw * s * math.sin(thetaE)
-        x_n = self.r2_draw * s * math.cos(thetaN)
-        y_n = self.r2_draw * s * math.sin(thetaN)
-        self.earthDot.setRect(QRectF(x_e - 6, y_e - 6, 12, 12))
-        self.neoDot.setRect(QRectF(x_n - 6, y_n - 6, 12, 12))
-
-        # spacecraft position / trail
-        if self.use_lambert and self._lam_s:
-            f = max(0.0, min(1.0, self.t_days / max(self.tof_days, 1e-9)))
-            import bisect
-
-            j = min(len(self._lam_s) - 1, max(1, bisect.bisect_left(self._lam_s, f)))
-            x_sc, y_sc = self.lambert_pts[j]
-            # trail up to j
-            path = QPainterPath(QPointF(self.lambert_pts[0][0] * s, self.lambert_pts[0][1] * s))
-            for k in range(1, j + 1):
-                path.lineTo(QPointF(self.lambert_pts[k][0] * s, self.lambert_pts[k][1] * s))
-            self.scTrack.setPath(path)
-            self.scDot.setRect(QRectF(x_sc * s - 5, y_sc * s - 5, 10, 10))
-        else:
-            # simple half-ellipse guide
-            a = self.a_draw * s
-            b = self.b_draw * s
-            e = self.e_draw
-            M = math.pi * (self.t_days / max(self.tof_days, 1e-9))
-            x_sc = a * math.cos(M) - e * a
-            y_sc = b * math.sin(M)
-            path = QPainterPath(QPointF(a - e * a, 0))
-            for i in range(1, 181):
-                Ei = (i / 180.0) * M
-                xi = a * math.cos(Ei) - e * a
-                yi = b * math.sin(Ei)
-                path.lineTo(QPointF(xi, yi))
-            self.scTrack.setPath(path)
-            self.scDot.setRect(QRectF(x_sc - 5, y_sc - 5, 10, 10))
-
-        # labels
-        self.lblEarth.setPos(x_e + 12, y_e - 12)
-        self.lblNeo.setPos(x_n + 12, y_n - 12)
-        self.lblSc.setPos(self.scDot.rect().x() + 14, self.scDot.rect().y() - 2)
-
-    # --------- controls ---------
-    def play(self, spd=1.0):
-        self.playing = True
-        self.speed = spd
-
-    def pause(self):
-        self.playing = False
-
-    def reset(self):
-        self.t_days = 0.0
-        self._tick()
-
-    def step(self):
-        if not self.playing:
+    def focus_mission(self) -> None:
+        if self.mission is None:
             return
-        self.t_days = min(self.tof_days, self.t_days + (self.tof_days / 900.0) * self.speed)
-        self._tick()
+        path = self.mission.polyline_au
+        center = np.mean(path, axis=0)
+        extent = float(np.max(np.linalg.norm(path - center, axis=1)))
+        self.setCameraPosition(
+            pos=QtGui.QVector3D(*center.astype(float)),
+            distance=max(2.8, extent * 3.2),
+            elevation=54,
+            azimuth=-35,
+        )
 
-    def resizeEvent(self, e):
-        super().resizeEvent(e)
-        self._update_geometry()
-        self._tick()
 
+class MissionViewer(QtWidgets.QMainWindow):
+    TIMER_INTERVAL_MS = 33
 
-class MainWindow(QMainWindow):
     def __init__(self, path: Path):
         super().__init__()
-        self.setWindowTitle("Asteroid Intercept Planner — Transfer Viewer")
-        self.plan = load_first_plan(path)
+        self.missions = load_missions(path)
+        self.mission = self.missions[0]
+        self.elapsed_days = 0.0
+        self.playing = True
+        self._scrubbing = False
+        self._resume_after_scrub = False
+        self.setWindowTitle("Asteroid Intercept Planner — 3D Mission Map")
+        self.setMinimumSize(1180, 760)
+        self.resize(1480, 900)
+        self._build_ui()
+        self._set_mission(0)
+        self.timer = QtCore.QTimer(self)
+        self.timer.timeout.connect(self._advance)
+        self.timer.start(self.TIMER_INTERVAL_MS)
 
-        # UI
-        cw = QWidget()
-        self.setCentralWidget(cw)
-        v = QVBoxLayout(cw)
-        v.setContentsMargins(6, 6, 6, 6)
-        v.setSpacing(6)
+    def _build_ui(self) -> None:
+        splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
+        splitter.setChildrenCollapsible(False)
+        self.setCentralWidget(splitter)
 
-        self.canvas = Canvas(self.plan)
-        v.addWidget(self.canvas, 1)
+        self.view = SolarSystemView()
+        splitter.addWidget(self.view)
 
-        bar = QHBoxLayout()
-        v.addLayout(bar)
-        self.btnPlay = QPushButton("Play")
-        self.btnPause = QPushButton("Pause")
-        self.btnReset = QPushButton("Reset")
-        self.speed = QSlider(Qt.Orientation.Horizontal)
-        self.speed.setMinimum(1)
-        self.speed.setMaximum(40)
-        self.speed.setValue(10)
-        self.lbl = QLabel("Speed x1.0")
-        for w in (
-            self.btnPlay,
-            self.btnPause,
-            self.btnReset,
-            QLabel("  Speed:"),
-            self.speed,
-            self.lbl,
+        panel = QtWidgets.QFrame()
+        panel.setObjectName("controlPanel")
+        panel.setMinimumWidth(350)
+        panel.setMaximumWidth(410)
+        panel_layout = QtWidgets.QVBoxLayout(panel)
+        panel_layout.setContentsMargins(24, 24, 24, 22)
+        panel_layout.setSpacing(14)
+
+        eyebrow = QtWidgets.QLabel("MISSION CONTROL")
+        eyebrow.setObjectName("eyebrow")
+        title = QtWidgets.QLabel("INTERCEPT MAP")
+        title.setObjectName("panelTitle")
+        panel_layout.addWidget(eyebrow)
+        panel_layout.addWidget(title)
+
+        panel_layout.addWidget(self._section_label("INTERCEPTION PLAN"))
+        self.mission_combo = QtWidgets.QComboBox()
+        self.mission_combo.setObjectName("missionCombo")
+        for mission in self.missions:
+            self.mission_combo.addItem(mission.label)
+        self.mission_combo.currentIndexChanged.connect(self._set_mission)
+        panel_layout.addWidget(self.mission_combo)
+
+        self.date_label = QtWidgets.QLabel()
+        self.date_label.setObjectName("dateLabel")
+        self.phase_label = QtWidgets.QLabel("COASTING")
+        self.phase_label.setObjectName("phaseLabel")
+        self.elapsed_label = QtWidgets.QLabel()
+        self.elapsed_label.setObjectName("elapsedLabel")
+        panel_layout.addWidget(self.date_label)
+        phase_row = QtWidgets.QHBoxLayout()
+        phase_row.addWidget(self.phase_label)
+        phase_row.addStretch(1)
+        phase_row.addWidget(self.elapsed_label)
+        panel_layout.addLayout(phase_row)
+
+        self.timeline = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self.timeline.setRange(0, 1000)
+        self.timeline.sliderPressed.connect(self._begin_scrub)
+        self.timeline.sliderReleased.connect(self._end_scrub)
+        self.timeline.valueChanged.connect(self._scrub_to)
+        panel_layout.addWidget(self.timeline)
+
+        controls = QtWidgets.QHBoxLayout()
+        self.play_button = QtWidgets.QPushButton("Pause")
+        self.play_button.clicked.connect(self._toggle_playback)
+        self.reset_button = QtWidgets.QPushButton("Restart")
+        self.reset_button.setObjectName("secondaryButton")
+        self.reset_button.clicked.connect(self._restart)
+        controls.addWidget(self.play_button)
+        controls.addWidget(self.reset_button)
+        panel_layout.addLayout(controls)
+
+        playback_row = QtWidgets.QHBoxLayout()
+        playback_row.addWidget(QtWidgets.QLabel("Simulation speed"))
+        self.speed_combo = QtWidgets.QComboBox()
+        for label, value in (
+            ("0.5 days/s", 0.5),
+            ("1 day/s", 1.0),
+            ("5 days/s", 5.0),
+            ("10 days/s", 10.0),
+            ("30 days/s", 30.0),
+            ("100 days/s", 100.0),
         ):
-            bar.addWidget(w)
+            self.speed_combo.addItem(label, value)
+        self.speed_combo.setCurrentIndex(3)
+        playback_row.addWidget(self.speed_combo, 1)
+        panel_layout.addLayout(playback_row)
 
-        self.btnPlay.clicked.connect(lambda: self.canvas.play(self.speed.value() / 10.0))
-        self.btnPause.clicked.connect(self.canvas.pause)
-        self.btnReset.clicked.connect(self.canvas.reset)
-        self.speed.valueChanged.connect(
-            lambda v: (
-                self.lbl.setText(f"Speed x{v / 10:.1f}"),
-                self.canvas.play(v / 10.0) if self.canvas.playing else None,
+        self.repeat_checkbox = QtWidgets.QCheckBox("Repeat mission on arrival")
+        self.repeat_checkbox.setChecked(True)
+        panel_layout.addWidget(self.repeat_checkbox)
+
+        panel_layout.addWidget(self._section_label("MISSION TELEMETRY"))
+        self.telemetry: dict[str, QtWidgets.QLabel] = {}
+        telemetry_grid = QtWidgets.QGridLayout()
+        telemetry_grid.setHorizontalSpacing(18)
+        telemetry_grid.setVerticalSpacing(10)
+        for row, (key, title_text) in enumerate(
+            (
+                ("target", "Target"),
+                ("approach", "Close approach"),
+                ("distance", "Miss distance"),
+                ("tof", "Time of flight"),
+                ("dv", "Total Δv"),
+                ("c3", "C3 estimate"),
+                ("position", "Spacecraft position"),
             )
+        ):
+            title_label = QtWidgets.QLabel(title_text)
+            title_label.setObjectName("telemetryKey")
+            value_label = QtWidgets.QLabel("—")
+            value_label.setObjectName("telemetryValue")
+            value_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight)
+            self.telemetry[key] = value_label
+            telemetry_grid.addWidget(title_label, row, 0)
+            telemetry_grid.addWidget(value_label, row, 1)
+        panel_layout.addLayout(telemetry_grid)
+
+        panel_layout.addWidget(self._section_label("CAMERA"))
+        camera_row = QtWidgets.QHBoxLayout()
+        for label, callback in (
+            ("Mission", self.view.focus_mission),
+            ("Inner", self.view.show_inner_system),
+            ("Full", self.view.show_full_system),
+        ):
+            button = QtWidgets.QPushButton(label)
+            button.setObjectName("cameraButton")
+            button.clicked.connect(callback)
+            camera_row.addWidget(button)
+        panel_layout.addLayout(camera_row)
+
+        help_text = QtWidgets.QLabel(
+            "DRAG TO ORBIT  ·  MIDDLE-DRAG TO PAN  ·  SCROLL TO ZOOM\n"
+            "SPACE PLAY/PAUSE  ·  R RESTART  ·  F FOCUS MISSION"
+        )
+        help_text.setObjectName("helpText")
+        help_text.setWordWrap(True)
+        panel_layout.addWidget(help_text)
+        panel_layout.addStretch(1)
+
+        legend = QtWidgets.QLabel(
+            '<span style="color:#ffe16a">● Sun</span>  '
+            '<span style="color:#b7ada0">● Mercury</span>  '
+            '<span style="color:#f2b757">● Venus</span>  '
+            '<span style="color:#43abff">● Earth</span>  '
+            '<span style="color:#f55933">● Mars</span><br>'
+            '<span style="color:#e0a86e">● Jupiter</span>  '
+            '<span style="color:#e8cc85">● Saturn</span>  '
+            '<span style="color:#75e0e8">● Uranus</span>  '
+            '<span style="color:#476df5">● Neptune</span><br>'
+            '<span style="color:#66ff99">● Target</span>  '
+            '<span style="color:#ff851f">● Spacecraft</span><br>'
+            "Positions and orbit geometry use AU; marker sizes are exaggerated."
+        )
+        legend.setObjectName("legend")
+        legend.setWordWrap(True)
+        panel_layout.addWidget(legend)
+
+        splitter.addWidget(panel)
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 0)
+        splitter.setSizes([1080, 380])
+        self.setStyleSheet(STYLESHEET)
+
+    def _section_label(self, text: str) -> QtWidgets.QLabel:
+        label = QtWidgets.QLabel(text)
+        label.setObjectName("sectionLabel")
+        return label
+
+    @QtCore.Slot(int)
+    def _set_mission(self, index: int) -> None:
+        if index < 0 or index >= len(self.missions):
+            return
+        self.mission = self.missions[index]
+        self.elapsed_days = 0.0
+        self.view.set_mission(self.mission)
+        self._update_telemetry_static()
+        self._render_time()
+        QtCore.QTimer.singleShot(0, self.view.focus_mission)
+
+    def _update_telemetry_static(self) -> None:
+        mission = self.mission
+        self.telemetry["target"].setText(mission.designation)
+        self.telemetry["approach"].setText(mission.approach_text)
+        self.telemetry["distance"].setText(f"{mission.distance_au:.6f} AU")
+        self.telemetry["tof"].setText(f"{mission.tof_days:.1f} days")
+        self.telemetry["dv"].setText(f"{mission.total_dv_kms:.3f} km/s")
+        self.telemetry["c3"].setText(
+            f"{mission.c3_km2_s2:.3f} km²/s²" if mission.c3_km2_s2 is not None else "—"
         )
 
-        # timer
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.canvas.step)
-        self.timer.start(16)
+    def _render_time(self) -> None:
+        mission = self.mission
+        progress = self.elapsed_days / max(mission.tof_days, 1e-9)
+        jd = mission.departure_jd + self.elapsed_days
+        spacecraft = self.view.update_time(jd, progress)
+        self.date_label.setText(format_jd(jd))
+        self.elapsed_label.setText(f"T+ {self.elapsed_days:06.2f} / {mission.tof_days:.1f} d")
+        self.phase_label.setText("ARRIVAL" if progress >= 0.9999 else "COASTING")
+        self.telemetry["position"].setText(
+            f"{spacecraft[0]:+.3f}, {spacecraft[1]:+.3f}, {spacecraft[2]:+.3f} AU"
+        )
+        if not self._scrubbing:
+            self.timeline.blockSignals(True)
+            self.timeline.setValue(round(max(0.0, min(1.0, progress)) * 1000))
+            self.timeline.blockSignals(False)
+
+    @QtCore.Slot()
+    def _advance(self) -> None:
+        if not self.playing or self._scrubbing:
+            return
+        seconds = self.TIMER_INTERVAL_MS / 1000.0
+        self.elapsed_days += float(self.speed_combo.currentData()) * seconds
+        if self.elapsed_days >= self.mission.tof_days:
+            if self.repeat_checkbox.isChecked():
+                self.elapsed_days %= self.mission.tof_days
+            else:
+                self.elapsed_days = self.mission.tof_days
+                self.playing = False
+                self.play_button.setText("Play")
+        self._render_time()
+
+    @QtCore.Slot()
+    def _toggle_playback(self) -> None:
+        self.playing = not self.playing
+        self.play_button.setText("Pause" if self.playing else "Play")
+
+    @QtCore.Slot()
+    def _restart(self) -> None:
+        self.elapsed_days = 0.0
+        self.playing = True
+        self.play_button.setText("Pause")
+        self._render_time()
+
+    @QtCore.Slot()
+    def _begin_scrub(self) -> None:
+        self._resume_after_scrub = self.playing
+        self._scrubbing = True
+        self.playing = False
+
+    @QtCore.Slot()
+    def _end_scrub(self) -> None:
+        self._scrubbing = False
+        self.playing = self._resume_after_scrub
+        self.play_button.setText("Pause" if self.playing else "Play")
+        self._render_time()
+
+    @QtCore.Slot(int)
+    def _scrub_to(self, value: int) -> None:
+        if not self._scrubbing:
+            return
+        self.elapsed_days = self.mission.tof_days * value / 1000.0
+        self._render_time()
+
+    def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:
+        if event.key() == QtCore.Qt.Key.Key_Space:
+            self._toggle_playback()
+        elif event.key() == QtCore.Qt.Key.Key_R:
+            self._restart()
+        elif event.key() == QtCore.Qt.Key.Key_F:
+            self.view.focus_mission()
+        else:
+            super().keyPressEvent(event)
 
 
-def main():
-    p = Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_INTERCEPT
-    app = QApplication(sys.argv)
-    w = MainWindow(p)
-    w.resize(1100, 760)
-    w.show()
-    sys.exit(app.exec())
+# Compatibility name retained for existing smoke tests and integrations.
+MainWindow = MissionViewer
+
+
+STYLESHEET = """
+QMainWindow, QWidget { background: #070b12; color: #e7f0fa; font-family: Inter, "SF Pro Text", sans-serif; }
+QFrame#controlPanel { background: #0d141e; border-left: 1px solid #263446; }
+QLabel#eyebrow { color: #52d6ec; font-size: 10px; font-weight: 800; letter-spacing: 2px; }
+QLabel#panelTitle { color: #f0f6fc; font-size: 26px; font-weight: 800; letter-spacing: 1px; }
+QLabel#sectionLabel { color: #708399; border-bottom: 1px solid #263446; padding: 10px 0 6px 0; font-size: 10px; font-weight: 800; letter-spacing: 1.5px; }
+QLabel#dateLabel { color: #f1f6fc; font-size: 20px; font-weight: 750; padding-top: 4px; }
+QLabel#phaseLabel { color: #071015; background: #52d6ec; border-radius: 4px; padding: 3px 8px; font-size: 10px; font-weight: 900; }
+QLabel#elapsedLabel, QLabel#telemetryKey { color: #778a9f; font-size: 11px; }
+QLabel#telemetryValue { color: #e0e9f2; font-size: 11px; font-weight: 650; }
+QLabel#helpText, QLabel#legend { color: #63758a; font-size: 9px; line-height: 1.4; }
+QComboBox { background: #111c29; border: 1px solid #2b3d52; border-radius: 7px; padding: 9px 10px; color: #e7f0fa; }
+QComboBox::drop-down { border: 0; width: 24px; }
+QComboBox QAbstractItemView { background: #111c29; selection-background-color: #1b4e63; color: #e7f0fa; }
+QPushButton { background: #52d6ec; color: #071015; border: 0; border-radius: 7px; padding: 10px 12px; font-weight: 800; }
+QPushButton:hover { background: #74e2f3; }
+QPushButton#secondaryButton, QPushButton#cameraButton { background: #111c29; color: #dbe7f2; border: 1px solid #2b3d52; }
+QPushButton#secondaryButton:hover, QPushButton#cameraButton:hover { border-color: #52d6ec; }
+QCheckBox { color: #9fb0c2; spacing: 8px; }
+QCheckBox::indicator { width: 15px; height: 15px; }
+QSlider::groove:horizontal { height: 4px; background: #263446; border-radius: 2px; }
+QSlider::sub-page:horizontal { background: #52d6ec; border-radius: 2px; }
+QSlider::handle:horizontal { background: #f3f8fc; width: 14px; margin: -5px 0; border-radius: 7px; }
+QSplitter::handle { background: #263446; width: 1px; }
+"""
+
+
+def main() -> int:
+    path = Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_INTERCEPT
+    application = QtWidgets.QApplication(sys.argv)
+    application.setApplicationName("Asteroid Intercept Planner")
+    window = MissionViewer(path)
+    window.show()
+    return application.exec()
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

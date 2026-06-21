@@ -2,7 +2,7 @@
 
 A desktop application and automated data pipeline for exploring upcoming asteroid close approaches and sizing preliminary Earth-to-asteroid transfers.
 
-The project combines live [JPL Small-Body Database](https://ssd-api.jpl.nasa.gov/doc/sbdb.html) and [Close-Approach Data](https://ssd-api.jpl.nasa.gov/doc/cad.html) with normalized SQLite storage, a searchable Flask dashboard, and a PySide6 transfer viewer. A scheduled GitHub Actions workflow refreshes the database four times per day.
+The project combines live [JPL Small-Body Database](https://ssd-api.jpl.nasa.gov/doc/sbdb.html) and [Close-Approach Data](https://ssd-api.jpl.nasa.gov/doc/cad.html) with normalized SQLite storage, a searchable Flask dashboard, and an interactive OpenGL solar-system map. A scheduled GitHub Actions workflow refreshes the database four times per day.
 
 > This is a research and portfolio project, not an operational navigation product.
 
@@ -16,7 +16,9 @@ The project combines live [JPL Small-Body Database](https://ssd-api.jpl.nasa.gov
 - Stores encounters, elements, ingestion history, and transfer plans in SQLite.
 - Presents the catalog through a dark, responsive web dashboard.
 - Provides a read-only SQL explorer, CSV export, and JSON API.
-- Exports database records into the interactive orbit viewer.
+- Exports time-sampled 3D transfer trajectories into an interactive mission viewer.
+- Propagates all eight planets and the selected asteroid against the simulation date.
+- Supports mission selection, timeline scrubbing, repeat playback, speed control, and map-style camera navigation.
 - Launches ingestion, the dashboard, and the viewer from one desktop window.
 
 ## Architecture
@@ -46,7 +48,23 @@ The launchpad provides three actions:
 
 1. **Update from JPL** fetches data, computes transfers, and updates SQLite.
 2. **Launch dashboard** starts the local Flask application and opens it in a browser.
-3. **Launch viewer** exports the latest database plans and opens the Qt animation.
+3. **Launch viewer** exports the latest database plans and opens the 3D mission map.
+
+## 3D mission viewer
+
+The viewer is modeled after a spaceflight map screen rather than a decorative animation. Distances and orbital geometry share one astronomical-unit scale; only marker sizes are exaggerated so planets remain visible.
+
+![Full solar-system mission viewer](docs/mission-viewer.png)
+
+- Select any stored interception from the side panel.
+- Watch the date, elapsed mission time, spacecraft coordinates, Δv, C3, and encounter metrics.
+- Drag to orbit the camera, middle-drag to pan, and use the wheel to zoom.
+- Switch between mission, inner-system, and full-system camera presets.
+- Scrub to any mission time or play continuously at 0.5-100 simulated days per second.
+- Leave repeat enabled to restart automatically on arrival.
+- Use `Space` for play/pause, `R` to restart, and `F` to focus the selected mission.
+
+Planet states use JPL's approximate J2000 elements and secular rates. Earth uses the same configured analytic or Skyfield ephemeris as the transfer planner. The selected asteroid is propagated from its SBDB osculating elements, and the spacecraft follows the validated, time-uniform 3D Lambert trajectory.
 
 Individual components can also be run directly:
 
@@ -120,7 +138,7 @@ ruff check app scripts/orbital.py scripts/ephem_earth.py \
   scripts/hud_metrics.py scripts/plan_intercepts.py scripts/sbdb_client.py tests run.py
 ```
 
-Tests cover database idempotency, read-only SQL enforcement, Flask routes, Kepler propagation, and Lambert endpoint closure.
+Tests cover database idempotency, read-only SQL enforcement, Flask routes, planetary propagation, 3D mission loading, Kepler propagation, and Lambert endpoint closure.
 
 ## Scope and limitations
 

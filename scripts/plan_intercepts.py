@@ -138,7 +138,7 @@ def plan_intercept_for_object(
                     "c3_km2_s2": (dv_dep / 1000.0) ** 2,
                     "vinf_kms": dv_dep / 1000.0,
                     "leo_dv_kms": leo_departure_dv(dv_dep / 1000.0, leo_alt_m=leo_alt_m),
-                    "lambert_polyline_xy_au": poly,
+                    "lambert_polyline_xyz_au": poly,
                 }
     return best
 
@@ -164,7 +164,7 @@ def attach_intercepts(
 
     payload["intercept_note"] = {
         "frame": "heliocentric ecliptic (Sun μ)",
-        "earth_model": "DE ephemeris via Skyfield (fallback: Kepler)",
+        "earth_model": "configured analytic or Skyfield ephemeris",
         "cost": "minimize |v1−vE| + |vast−v2|",
         "dv_units": "km/s",
         "time_scale": "TDB JD",

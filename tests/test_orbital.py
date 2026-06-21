@@ -11,6 +11,7 @@ from scripts.orbital import (
     kepler_E_from_M,
     kepler_universal_propagate,
     lambert_universal,
+    sample_transfer_polyline,
 )
 
 
@@ -38,6 +39,11 @@ def test_lambert_solution_hits_requested_endpoint():
     departure_velocity, _ = lambert_universal(departure, arrival, tof_seconds)
     propagated, _ = kepler_universal_propagate(departure, departure_velocity, tof_seconds)
     assert np.linalg.norm(propagated - arrival) < 25_000.0
+    polyline = np.asarray(
+        sample_transfer_polyline(departure, departure_velocity, tof_seconds, n=20)
+    )
+    assert polyline.shape == (21, 3)
+    assert np.linalg.norm(polyline[-1] * AU_M - arrival) < 25_000.0
 
 
 def test_lambert_rejects_nonpositive_time():

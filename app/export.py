@@ -61,7 +61,7 @@ def build_viewer_payload(path: Path | None = None) -> dict[str, Any]:
                     "dv_total_kms": row["total_dv_kms"],
                     "c3_km2_s2": row["c3_km2_s2"],
                     "leo_dv_kms": row["leo_departure_dv_kms"],
-                    "lambert_polyline_xy_au": json.loads(row["polyline_json"] or "[]"),
+                    "lambert_polyline_xyz_au": json.loads(row["polyline_json"] or "[]"),
                 },
             }
         )
