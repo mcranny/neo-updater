@@ -59,8 +59,8 @@ class Launchpad(QtWidgets.QMainWindow):
         )
         viewer_card, self.viewer_button = self._card(
             "ORBIT VIEWER",
-            "See the trajectory",
-            "Animate Earth-to-asteroid transfer geometry and mission timing from the latest dataset.",
+            "Explore the mission in 3D",
+            "Navigate the full solar system, select an interception plan, and replay its Lambert transfer.",
             "Launch viewer",
         )
         cards.addWidget(dashboard_card)

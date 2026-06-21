@@ -33,6 +33,10 @@ def test_schema_import_and_export_are_idempotent(tmp_path, sample_payload):
     exported = build_viewer_payload(database)
     assert exported["count"] == 1
     assert exported["objects"][0]["intercept"]["tof_days"] == 120
+    assert exported["objects"][0]["intercept"]["lambert_polyline_xyz_au"] == [
+        [1.0, 0.0],
+        [0.7, 0.9],
+    ]
 
 
 def test_readonly_query_rejects_mutations(tmp_path, sample_payload):

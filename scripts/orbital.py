@@ -314,7 +314,7 @@ def kepler_universal_propagate(
 def sample_transfer_polyline(r1, v1, tof_s: Number, n: int = 220, mu: float = MU_SUN):
     """
     Sample points along the transfer from (r1, v1) over tof_s seconds.
-    Returns a list of (x_AU, y_AU) for plotting (ecliptic XY projection).
+    Returns time-uniform (x_AU, y_AU, z_AU) points in ecliptic J2000.
     """
     r1 = np.asarray(r1, dtype=float)
     v1 = np.asarray(v1, dtype=float)
@@ -324,5 +324,5 @@ def sample_transfer_polyline(r1, v1, tof_s: Number, n: int = 220, mu: float = MU
     for k in range(n + 1):
         t = (k / n) * tof_s
         r, _ = kepler_universal_propagate(r1, v1, t, mu)
-        pts.append((r[0] / AU_M, r[1] / AU_M))
+        pts.append((r[0] / AU_M, r[1] / AU_M, r[2] / AU_M))
     return pts

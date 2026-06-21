@@ -103,6 +103,8 @@ This check is intentionally separate from the Lambert time equation. It caught a
 1. dividing the Lambert `y(z)` expression by `C(z)` instead of `sqrt(C(z))`; and
 2. using the radial-distance expression as the universal Kepler residual.
 
+Accepted transfers are sampled at uniform time intervals in all three ecliptic J2000 coordinates. The viewer therefore interpolates simulation time along the validated conic rather than moving at a visually convenient constant arc-length speed.
+
 ## 6. Search objective
 
 For each close approach, the application evaluates a configured grid of arrival offsets and times of flight. For a candidate solution,
@@ -140,6 +142,8 @@ The test suite verifies:
 - Kepler-equation residuals;
 - one-period closure of a circular Earth orbit;
 - Lambert propagation to a known Earth-to-Mars-like endpoint;
+- finite, physically plausible states and 3D orbit curves for all eight planets;
+- mission selection data and legacy-path compatibility;
 - rejection of nonpositive transfer time;
 - idempotent database upserts;
 - foreign-key-compatible viewer export;

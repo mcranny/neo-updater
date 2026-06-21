@@ -242,7 +242,11 @@ def upsert_payload(payload: dict[str, Any], path: Path | None = None) -> dict[st
                         total_dv,
                         plan.get("c3_km2_s2"),
                         plan.get("leo_dv_kms"),
-                        json.dumps(plan.get("lambert_polyline_xy_au") or []),
+                        json.dumps(
+                            plan.get("lambert_polyline_xyz_au")
+                            or plan.get("lambert_polyline_xy_au")
+                            or []
+                        ),
                         now,
                     ),
                 )
