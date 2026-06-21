@@ -9,37 +9,29 @@ Internal dynamics use SI units:
 - distance: metres;
 - velocity: metres per second;
 - time: seconds;
-- solar gravitational parameter: `1.32712440018e20 m³/s²`.
+- solar gravitational parameter: $\mu = 1.32712440018 \times 10^{20}\ \mathrm{m^3/s^2}$.
 
 Times from JPL are interpreted as TDB Julian dates. Asteroid elements and computed state vectors use the ecliptic J2000 frame. Skyfield's ICRF state is rotated about the x-axis by the J2000 mean obliquity before use.
 
 ## 2. Asteroid state propagation
 
-For semi-major axis `a`, eccentricity `e`, and solar parameter `μ`, the mean motion is
+For semi-major axis $a$, eccentricity $e$, and solar parameter $\mu$, the mean motion is
 
-```text
-n = sqrt(μ / a³).
-```
+$$n = \sqrt{\mu / a^3}.$$
 
-If SBDB provides a mean anomaly `M₀` at epoch `t₀`, then
+If SBDB provides a mean anomaly $M_0$ at epoch $t_0$, then
 
-```text
-M(t) = wrap₂π(M₀ + n(t - t₀)).
-```
+$$M(t) = \big(M_0 + n(t - t_0)\big) \bmod 2\pi.$$
 
-If a perihelion epoch `tₚ` is available, the equivalent expression is
+If a perihelion epoch $t_p$ is available, the equivalent expression is
 
-```text
-M(t) = wrap₂π(n(t - tₚ)).
-```
+$$M(t) = \big(n(t - t_p)\big) \bmod 2\pi.$$
 
-For an elliptical orbit, eccentric anomaly `E` is found with Newton iteration on Kepler's equation:
+For an elliptical orbit, eccentric anomaly $E$ is found with Newton iteration on Kepler's equation:
 
-```text
-E - e sin(E) = M.
-```
+$$E - e \sin(E) = M.$$
 
-The perifocal position and velocity are then rotated by `R₃(Ω) R₁(i) R₃(ω)` into ecliptic J2000.
+The perifocal position and velocity are then rotated by $R_3(\Omega)\, R_1(i)\, R_3(\omega)$ into ecliptic J2000.
 
 ## 3. Earth state
 
@@ -51,56 +43,41 @@ The ephemeris choice materially affects precise departure velocity. Results shou
 
 ## 4. Lambert formulation
 
-Given departure position **r₁**, arrival position **r₂**, transfer angle `Δθ`, and time of flight `Δt`, define
+Given departure position $\mathbf{r}_1$, arrival position $\mathbf{r}_2$, transfer angle $\Delta\theta$, and time of flight $\Delta t$, define
 
-```text
-A = sin(Δθ) sqrt(|r₁||r₂| / (1 - cos(Δθ))).
-```
+$$A = \sin(\Delta\theta)\sqrt{\dfrac{|\mathbf{r}_1||\mathbf{r}_2|}{1 - \cos(\Delta\theta)}}.$$
 
-The universal-variable solution uses Stumpff functions `C(z)` and `S(z)` and
+The universal-variable solution uses Stumpff functions $C(z)$ and $S(z)$ and
 
-```text
-y(z) = |r₁| + |r₂| + A (z S(z) - 1) / sqrt(C(z)),
+$$y(z) = |\mathbf{r}_1| + |\mathbf{r}_2| + A\,\frac{zS(z) - 1}{\sqrt{C(z)}},$$
 
-F(z) = (y(z) / C(z))^(3/2) S(z) + A sqrt(y(z)) - sqrt(μ) Δt.
-```
+$$F(z) = \left(\frac{y(z)}{C(z)}\right)^{3/2} S(z) + A\sqrt{y(z)} - \sqrt{\mu}\,\Delta t.$$
 
-The code scans the finite single-revolution domain for a sign-changing bracket and then applies bisection. Invalid regions where `y(z) <= 0` are skipped; they are not treated as valid infinite-time samples.
+The code scans the finite single-revolution domain for a sign-changing bracket and then applies bisection. Invalid regions where $y(z) \le 0$ are skipped; they are not treated as valid infinite-time samples.
 
 After obtaining the root,
 
-```text
-f    = 1 - y / |r₁|,
-g    = A sqrt(y / μ),
-gdot = 1 - y / |r₂|,
+$$f = 1 - \frac{y}{|\mathbf{r}_1|}, \qquad g = A\sqrt{\frac{y}{\mu}}, \qquad \dot{g} = 1 - \frac{y}{|\mathbf{r}_2|},$$
 
-v₁ = (r₂ - f r₁) / g,
-v₂ = (gdot r₂ - r₁) / g.
-```
+$$\mathbf{v}_1 = \frac{\mathbf{r}_2 - f\,\mathbf{r}_1}{g}, \qquad \mathbf{v}_2 = \frac{\dot{g}\,\mathbf{r}_2 - \mathbf{r}_1}{g}.$$
 
 Both prograde and retrograde branches are attempted. The first branch that solves and passes validation is eligible for the search.
 
 ## 5. Independent endpoint validation
 
-Each Lambert departure state is propagated over `Δt` with the universal Kepler equation:
+Each Lambert departure state is propagated over $\Delta t$ with the universal Kepler equation:
 
-```text
-F(χ) = (r₀·v₀ / sqrt(μ)) χ² C(αχ²)
-     + (1 - α|r₀|) χ³ S(αχ²)
-     + |r₀|χ - sqrt(μ)Δt,
+$$F(\chi) = \frac{\mathbf{r}_0 \cdot \mathbf{v}_0}{\sqrt{\mu}}\,\chi^2\, C(\alpha\chi^2) + \big(1 - \alpha|\mathbf{r}_0|\big)\,\chi^3\, S(\alpha\chi^2) + |\mathbf{r}_0|\chi - \sqrt{\mu}\,\Delta t,$$
 
-α = 2/|r₀| - |v₀|²/μ.
-```
+$$\alpha = \frac{2}{|\mathbf{r}_0|} - \frac{|\mathbf{v}_0|^2}{\mu}.$$
 
-The propagated endpoint must agree with the requested **r₂** within
+The propagated endpoint must agree with the requested $\mathbf{r}_2$ within
 
-```text
-max(10 km, 10⁻⁷ |r₂|).
-```
+$$\max\left(10\ \mathrm{km},\ 10^{-7}|\mathbf{r}_2|\right).$$
 
 This check is intentionally separate from the Lambert time equation. It caught and prevents two subtle implementation errors that can otherwise generate smooth-looking but incorrect transfer curves:
 
-1. dividing the Lambert `y(z)` expression by `C(z)` instead of `sqrt(C(z))`; and
+1. dividing the Lambert $y(z)$ expression by $C(z)$ instead of $\sqrt{C(z)}$; and
 2. using the radial-distance expression as the universal Kepler residual.
 
 Accepted transfers are sampled at uniform time intervals in all three ecliptic J2000 coordinates. The viewer therefore interpolates simulation time along the validated conic rather than moving at a visually convenient constant arc-length speed.
@@ -109,29 +86,23 @@ Accepted transfers are sampled at uniform time intervals in all three ecliptic J
 
 For each close approach, the application evaluates a configured grid of arrival offsets and times of flight. For a candidate solution,
 
-```text
-Δv_depart = |v₁ - v_Earth(t₁)|,
-Δv_arrive = |v_asteroid(t₂) - v₂|,
-Δv_total  = Δv_depart + Δv_arrive.
-```
+$$\Delta v_{\text{depart}} = |\mathbf{v}_1 - \mathbf{v}_{\text{Earth}}(t_1)|, \qquad \Delta v_{\text{arrive}} = |\mathbf{v}_{\text{asteroid}}(t_2) - \mathbf{v}_2|,$$
 
-The stored plan minimizes `Δv_total` over the sampled grid. This is a rendezvous-style velocity-matching metric, not merely a geometric flyby intercept.
+$$\Delta v_{\text{total}} = \Delta v_{\text{depart}} + \Delta v_{\text{arrive}}.$$
+
+The stored plan minimizes $\Delta v_{\text{total}}$ over the sampled grid. This is a rendezvous-style velocity-matching metric, not merely a geometric flyby intercept.
 
 ## 7. C3 and parking-orbit estimate
 
 The heliocentric departure mismatch is treated as an approximate Earth-relative hyperbolic excess speed:
 
-```text
-C3 ≈ v∞² ≈ Δv_depart².
-```
+$$C_3 \approx v_\infty^2 \approx \Delta v_{\text{depart}}^2.$$
 
-For parking-orbit radius `r = R_Earth + h`,
+For parking-orbit radius $r = R_{\text{Earth}} + h$,
 
-```text
-v_circular = sqrt(μ_Earth / r),
-v_escape   = sqrt(2 μ_Earth / r),
-Δv_LEO     = sqrt(v∞² + v_escape²) - v_circular.
-```
+$$v_{\text{circular}} = \sqrt{\mu_{\text{Earth}} / r}, \qquad v_{\text{escape}} = \sqrt{2\mu_{\text{Earth}} / r},$$
+
+$$\Delta v_{\text{LEO}} = \sqrt{v_\infty^2 + v_{\text{escape}}^2} - v_{\text{circular}}.$$
 
 This patched-conic mapping is useful for first-order comparison only. A rigorous Earth-departure design must transform the heliocentric asymptote into the correct geocentric frame and include launch-site and finite-burn constraints.
 

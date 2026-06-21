@@ -40,9 +40,9 @@ Install Python 3.11 or later, download the repository, and run:
 python run.py
 ```
 
-There is no environment to activate. On the first launch, `run.py` creates a private `.venv` and installs the desktop dependencies automatically. Later launches reuse it. Internet access is only required for that initial setup and live JPL updates.
+`run.py` handles dependency setup automatically on first launch and reuses it on later runs.
 
-For a double-click launch, use `Run Asteroid Planner.command` on macOS or `Run Asteroid Planner.bat` on Windows. Copy `.env.example` to `.env` only when you want to override the documented defaults.
+For a double-click launch, use `Run Asteroid Planner.command` on macOS or `Run Asteroid Planner.bat` on Windows.
 
 The application opens directly with two tabs:
 
@@ -79,7 +79,7 @@ python -m app.web
 python -m app.neo_viewer_qt data/latest_intercepts.json
 ```
 
-If the private runtime is damaged, delete `.venv` and launch `python run.py` again. For a manual developer installation:
+For a manual developer installation:
 
 ```bash
 python -m pip install -e ".[desktop]"
@@ -87,7 +87,7 @@ python -m pip install -e ".[desktop]"
 
 ## Configuration
 
-All operational settings live in `.env`; `.env.example` documents every supported value.
+Operational defaults are listed below; `.env.example` documents every supported value if you want to override one.
 
 | Variable | Default | Purpose |
 |---|---:|---|
@@ -104,8 +104,6 @@ All operational settings live in `.env`; `.env.example` documents every supporte
 | `EPHEMERIS_MODE` | `analytic` | Deterministic Earth model or `skyfield` |
 | `JPL_EPHEMERIS_PATH` | empty | Optional local JPL DE kernel |
 | `FLASK_HOST` / `FLASK_PORT` | `127.0.0.1` / `5000` | Local dashboard address |
-
-No API key is required for the JPL SSD endpoints used by this project. `.env` is ignored by Git.
 
 ## Data model
 

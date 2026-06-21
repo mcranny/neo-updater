@@ -421,6 +421,7 @@ class ObjectDetailsPanel(QtWidgets.QFrame):
         layout.setContentsMargins(0, 0, 0, 16)
         layout.setSpacing(0)
         header = ObjectPanelHeader(self)
+        header.setFixedHeight(46)
         header_layout = QtWidgets.QHBoxLayout(header)
         header_layout.setContentsMargins(14, 9, 8, 9)
         drag_mark = QtWidgets.QLabel("⠿")
@@ -438,6 +439,7 @@ class ObjectDetailsPanel(QtWidgets.QFrame):
         layout.addWidget(header)
 
         body = QtWidgets.QWidget()
+        self.body = body
         body_layout = QtWidgets.QVBoxLayout(body)
         body_layout.setContentsMargins(18, 14, 18, 2)
         body_layout.setSpacing(10)
@@ -483,7 +485,7 @@ class ObjectDetailsPanel(QtWidgets.QFrame):
             self.rows_layout.addWidget(key_label, row, 0)
             self.rows_layout.addWidget(value_label, row, 1)
         self.rows_layout.setColumnStretch(1, 1)
-        self.setMinimumHeight(310 if title == "Intercept spacecraft" else 0)
+        self.body.setMinimumHeight(264 if title == "Intercept spacecraft" else 0)
         self.adjustSize()
         self.show()
         self.raise_()
