@@ -23,7 +23,7 @@ ephemeris = ["skyfield>=1.49,<2", "jplephem>=2.21,<3"]
 dev = ["pytest>=8,<9", "ruff>=0.5,<1"]
 
 [project.scripts]
-asteroid-planner = "app.launcher:main"
+asteroid-planner = "app.integrated_app:main"
 asteroid-ingest = "app.ingest:main"
 asteroid-web = "app.web:main"
 

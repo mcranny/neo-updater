@@ -2,7 +2,7 @@
 
 A desktop application and automated data pipeline for exploring upcoming asteroid close approaches and sizing preliminary Earth-to-asteroid transfers.
 
-The project combines live [JPL Small-Body Database](https://ssd-api.jpl.nasa.gov/doc/sbdb.html) and [Close-Approach Data](https://ssd-api.jpl.nasa.gov/doc/cad.html) with normalized SQLite storage, a searchable Flask dashboard, and an interactive OpenGL solar-system map. A scheduled GitHub Actions workflow refreshes the database four times per day.
+The project combines live [JPL Small-Body Database](https://ssd-api.jpl.nasa.gov/doc/sbdb.html) and [Close-Approach Data](https://ssd-api.jpl.nasa.gov/doc/cad.html) with normalized SQLite storage, a native data explorer, and an interactive OpenGL solar-system map. A scheduled GitHub Actions workflow refreshes the database four times per day.
 
 > This is a research and portfolio project, not an operational navigation product.
 
@@ -14,41 +14,44 @@ The project combines live [JPL Small-Body Database](https://ssd-api.jpl.nasa.gov
 - Solves the heliocentric, single-revolution Lambert problem.
 - Rejects solutions that fail an endpoint propagation check.
 - Stores encounters, elements, ingestion history, and transfer plans in SQLite.
-- Presents the catalog through a dark, responsive web dashboard.
-- Provides a read-only SQL explorer, CSV export, and JSON API.
+- Presents the catalog and read-only SQL tools inside the desktop application.
+- Retains a responsive Flask dashboard, CSV export, and JSON API as a browser fallback.
 - Exports time-sampled 3D transfer trajectories into an interactive mission viewer.
 - Propagates all eight planets and the selected asteroid against the simulation date.
 - Supports mission selection, timeline scrubbing, repeat playback, speed control, and map-style camera navigation.
-- Launches ingestion, the dashboard, and the viewer from one desktop window.
+- Combines the mission viewer and SQLite explorer in one tabbed desktop window.
 
 ## Architecture
 
 ```text
 JPL CAD ── close approaches ─┐
-                            ├─> ingestion ─> SQLite ─┬─> Flask dashboard / API
-JPL SBDB ─ orbital elements ┘                        ├─> read-only SQL / CSV
-                                                     └─> JSON export ─> Qt viewer
+                            ├─> ingestion ─> SQLite ─┬─> native catalog / SQL
+JPL SBDB ─ orbital elements ┘                        ├─> Flask fallback / API
+                                                     └─> JSON export ─> 3D viewer
 ```
 
 The database is the source of truth. JSON is now only a portable viewer export; the pipeline no longer uses a collection of competing JSON snapshots.
 
 ## Quick start
 
-Python 3.11 or later is required.
+Install Python 3.11 or later, download the repository, and run:
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
-python -m pip install -e ".[desktop]"
-cp .env.example .env
 python run.py
 ```
 
-The launchpad provides three actions:
+There is no environment to activate. On the first launch, `run.py` creates a private `.venv` and installs the desktop dependencies automatically. Later launches reuse it. Internet access is only required for that initial setup and live JPL updates.
 
-1. **Update from JPL** fetches data, computes transfers, and updates SQLite.
-2. **Launch dashboard** starts the local Flask application and opens it in a browser.
-3. **Launch viewer** exports the latest database plans and opens the 3D mission map.
+For a double-click launch, use `Run Asteroid Planner.command` on macOS or `Run Asteroid Planner.bat` on Windows. Copy `.env.example` to `.env` only when you want to override the documented defaults.
+
+The application opens directly with two tabs:
+
+1. **Mission Viewer** contains the animated 3D solar system and interception controls.
+2. **Data Explorer** contains the searchable catalog and read-only SQLite query workspace.
+
+The integrated **Update from JPL** control refreshes the database and mission plans. A subdued **Browser version** link keeps the Flask interface available as a fallback.
+
+![Native SQLite data explorer](docs/data-explorer.png)
 
 ## 3D mission viewer
 
@@ -56,9 +59,11 @@ The viewer is modeled after a spaceflight map screen rather than a decorative an
 
 ![Full solar-system mission viewer](docs/mission-viewer.png)
 
-- Select any stored interception from the side panel.
+- Search and select any stored interception from the mission cards in the side panel.
 - Watch the date, elapsed mission time, spacecraft coordinates, Δv, C3, and encounter metrics.
-- Drag to orbit the camera, middle-drag to pan, and use the wheel to zoom.
+- Left-drag to pan in the viewing plane, right-drag to orbit, middle-drag to pan vertically, and use the wheel to zoom.
+- Left-click the Sun, planets, target NEO, or spacecraft to open its current state in a draggable inspector contained inside the mission viewer.
+- Distinct halos and colors identify Earth, the target NEO, and the intercept spacecraft at a glance.
 - Switch between mission, inner-system, and full-system camera presets.
 - Scrub to any mission time or play continuously at 0.5-100 simulated days per second.
 - Leave repeat enabled to restart automatically on arrival.
@@ -74,13 +79,11 @@ python -m app.web
 python -m app.neo_viewer_qt data/latest_intercepts.json
 ```
 
-If the launcher opens but the 3D viewer does not, reinstall the desktop extras in the same active environment and try again:
+If the private runtime is damaged, delete `.venv` and launch `python run.py` again. For a manual developer installation:
 
 ```bash
 python -m pip install -e ".[desktop]"
 ```
-
-The launcher surfaces the viewer's startup error and dependency command if the child process exits unexpectedly.
 
 ## Configuration
 
