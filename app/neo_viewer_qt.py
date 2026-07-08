@@ -168,9 +168,17 @@ class SolarSystemView(gl.GLViewWidget):
             size=7,
             pxMode=True,
         )
+        self.final_orbit_path = gl.GLLinePlotItem(
+            pos=np.empty((0, 3), dtype=np.float32),
+            color=(0.42, 1.0, 0.82, 0.78),
+            width=2.0,
+            antialias=True,
+            mode="line_strip",
+        )
         for item in (
             self.asteroid_orbit,
             self.transfer_path,
+            self.final_orbit_path,
             self.transfer_trail,
             self.departure_dot,
             self.arrival_dot,
@@ -196,12 +204,16 @@ class SolarSystemView(gl.GLViewWidget):
         self.transfer_trail.setData(pos=mission.polyline_au[:1])
         self.departure_dot.setData(pos=mission.polyline_au[:1])
         self.arrival_dot.setData(pos=mission.polyline_au[-1:])
+        if mission.final_orbit_polyline_au is not None:
+            self.final_orbit_path.setData(pos=mission.final_orbit_polyline_au)
+        else:
+            self.final_orbit_path.setData(pos=np.empty((0, 3), dtype=np.float32))
         for planet in PLANETS:
             elements = planet_elements(planet, mission.departure_jd)
             self.planet_orbits[planet.name].setData(pos=orbit_curve_au(elements))
         self.update_time(mission.departure_jd, 0.0)
 
-    def update_time(self, jd_tdb: float, progress: float) -> np.ndarray:
+    def update_time(self, jd_tdb: float, elapsed_days: float) -> np.ndarray:
         if self.mission is None:
             return np.zeros(3)
         self.current_jd = jd_tdb
@@ -218,12 +230,28 @@ class SolarSystemView(gl.GLViewWidget):
         self.object_positions["Target"] = asteroid_position
 
         path = self.mission.polyline_au
-        position = max(0.0, min(1.0, progress)) * (len(path) - 1)
-        low = int(position)
-        high = min(low + 1, len(path) - 1)
-        fraction = position - low
-        spacecraft = path[low] * (1.0 - fraction) + path[high] * fraction
-        trail = np.vstack([path[: low + 1], spacecraft]).astype(np.float32)
+        transfer_progress = max(0.0, min(1.0, elapsed_days / max(self.mission.tof_days, 1e-9)))
+        if elapsed_days <= self.mission.tof_days or self.mission.final_orbit_polyline_au is None:
+            position = transfer_progress * (len(path) - 1)
+            low = int(position)
+            high = min(low + 1, len(path) - 1)
+            fraction = position - low
+            spacecraft = path[low] * (1.0 - fraction) + path[high] * fraction
+            trail = np.vstack([path[: low + 1], spacecraft]).astype(np.float32)
+        else:
+            orbit = self.mission.final_orbit_polyline_au
+            capture_elapsed = elapsed_days - self.mission.tof_days
+            capture_progress = max(
+                0.0,
+                min(1.0, capture_elapsed / max(self.mission.capture_duration_days, 1e-9)),
+            )
+            position = capture_progress * (len(orbit) - 1)
+            low = int(position)
+            high = min(low + 1, len(orbit) - 1)
+            fraction = position - low
+            spacecraft = orbit[low] * (1.0 - fraction) + orbit[high] * fraction
+            orbit_trail = np.vstack([orbit[: low + 1], spacecraft]).astype(np.float32)
+            trail = np.vstack([path, orbit_trail]).astype(np.float32)
         self.transfer_trail.setData(pos=trail)
         self.spacecraft_dot.setData(pos=spacecraft.reshape(1, 3))
         self.spacecraft_halo.setData(pos=spacecraft.reshape(1, 3))
@@ -626,7 +654,7 @@ class MissionViewerWidget(QtWidgets.QWidget):
         playback_row.addWidget(self.speed_combo, 1)
         panel_layout.addLayout(playback_row)
 
-        self.repeat_checkbox = QtWidgets.QCheckBox("Repeat mission on arrival")
+        self.repeat_checkbox = QtWidgets.QCheckBox("Repeat full sequence")
         self.repeat_checkbox.setChecked(True)
         panel_layout.addWidget(self.repeat_checkbox)
 
@@ -641,7 +669,10 @@ class MissionViewerWidget(QtWidgets.QWidget):
                 ("approach", "Close approach"),
                 ("distance", "Miss distance"),
                 ("tof", "Time of flight"),
+                ("duration", "Playback duration"),
                 ("dv", "Total Δv"),
+                ("capture", "Capture Δv"),
+                ("stability", "Final orbit"),
                 ("c3", "C3 estimate"),
                 ("position", "Spacecraft position"),
             )
@@ -774,19 +805,37 @@ class MissionViewerWidget(QtWidgets.QWidget):
         self.telemetry["approach"].setText(mission.approach_text)
         self.telemetry["distance"].setText(f"{mission.distance_au:.6f} AU")
         self.telemetry["tof"].setText(f"{mission.tof_days:.1f} days")
+        self.telemetry["duration"].setText(f"{mission.total_duration_days:.1f} days")
         self.telemetry["dv"].setText(f"{mission.total_dv_kms:.3f} km/s")
+        capture = mission.capture or {}
+        capture_dv = capture.get("capture_dv_kms")
+        self.telemetry["capture"].setText(
+            f"{float(capture_dv):.6f} km/s" if capture_dv is not None else "—"
+        )
+        if capture:
+            self.telemetry["stability"].setText(
+                "stable" if capture.get("stable_final_orbit") else "flagged"
+            )
+        else:
+            self.telemetry["stability"].setText("—")
         self.telemetry["c3"].setText(
             f"{mission.c3_km2_s2:.3f} km²/s²" if mission.c3_km2_s2 is not None else "—"
         )
 
     def _render_time(self) -> None:
         mission = self.mission
-        progress = self.elapsed_days / max(mission.tof_days, 1e-9)
+        total_duration = max(mission.total_duration_days, 1e-9)
+        progress = self.elapsed_days / total_duration
         jd = mission.departure_jd + self.elapsed_days
-        spacecraft = self.view.update_time(jd, progress)
+        spacecraft = self.view.update_time(jd, self.elapsed_days)
         self.date_label.setText(format_jd(jd))
-        self.elapsed_label.setText(f"T+ {self.elapsed_days:06.2f} / {mission.tof_days:.1f} d")
-        self.phase_label.setText("ARRIVAL" if progress >= 0.9999 else "COASTING")
+        self.elapsed_label.setText(f"T+ {self.elapsed_days:06.2f} / {total_duration:.1f} d")
+        if self.elapsed_days < mission.tof_days:
+            self.phase_label.setText("COASTING")
+        elif mission.capture_duration_days > 0.0 and self.elapsed_days < total_duration:
+            self.phase_label.setText("CAPTURE ORBIT")
+        else:
+            self.phase_label.setText("COMPLETE")
         self.telemetry["position"].setText(
             f"{spacecraft[0]:+.3f}, {spacecraft[1]:+.3f}, {spacecraft[2]:+.3f} AU"
         )
@@ -801,11 +850,12 @@ class MissionViewerWidget(QtWidgets.QWidget):
             return
         seconds = self.TIMER_INTERVAL_MS / 1000.0
         self.elapsed_days += float(self.speed_combo.currentData()) * seconds
-        if self.elapsed_days >= self.mission.tof_days:
+        total_duration = max(self.mission.total_duration_days, 1e-9)
+        if self.elapsed_days >= total_duration:
             if self.repeat_checkbox.isChecked():
-                self.elapsed_days %= self.mission.tof_days
+                self.elapsed_days %= total_duration
             else:
-                self.elapsed_days = self.mission.tof_days
+                self.elapsed_days = total_duration
                 self.playing = False
                 self.play_button.setText("Play")
         self._render_time()
@@ -839,7 +889,7 @@ class MissionViewerWidget(QtWidgets.QWidget):
     def _scrub_to(self, value: int) -> None:
         if not self._scrubbing:
             return
-        self.elapsed_days = self.mission.tof_days * value / 1000.0
+        self.elapsed_days = self.mission.total_duration_days * value / 1000.0
         self._render_time()
 
     def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:

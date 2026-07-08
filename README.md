@@ -13,6 +13,7 @@ The project combines live [JPL Small-Body Database](https://ssd-api.jpl.nasa.gov
 - Searches configurable departure and arrival grids.
 - Solves the heliocentric, single-revolution Lambert problem.
 - Rejects solutions that fail an endpoint propagation check.
+- Estimates asteroid capture burn and a bounded final orbit with a Julia density-sphere model.
 - Stores encounters, elements, ingestion history, and transfer plans in SQLite.
 - Presents the catalog and read-only SQL tools inside the desktop application.
 - Retains a responsive Flask dashboard, CSV export, and JSON API as a browser fallback.
@@ -104,6 +105,7 @@ Operational defaults are listed below; `.env.example` documents every supported 
 | `INTERCEPT_TOF_STEP_DAYS` | `10` | Search-grid spacing |
 | `INTERCEPT_ARRIVAL_OFFSETS_HOURS` | `-12,-6,0,6,12` | Arrival offsets around closest approach |
 | `LEO_ALTITUDE_KM` | `500` | Parking orbit for approximate injection Δv |
+| `FINAL_ORBIT_COUNT` | `10` | Number of post-capture asteroid orbits to validate and animate |
 | `EPHEMERIS_MODE` | `analytic` | Deterministic Earth model or `skyfield` |
 | `JPL_EPHEMERIS_PATH` | empty | Optional local JPL DE kernel |
 | `FLASK_HOST` / `FLASK_PORT` | `127.0.0.1` / `5000` | Local dashboard address |
@@ -135,7 +137,7 @@ The generated viewer JSON and API caches are deliberately not committed.
 
 ## Mathematical model
 
-The planner uses osculating two-body elements in the ecliptic J2000 frame and a universal-variable Lambert solver. Every accepted Lambert solution is independently propagated to the requested arrival epoch and must satisfy an endpoint residual threshold.
+The planner uses osculating two-body elements in the ecliptic J2000 frame and a Julia universal-variable Lambert solver. Every accepted Lambert solution is independently propagated to the requested arrival epoch and must satisfy an endpoint residual threshold. The Julia backend then estimates asteroid-local capture and a final circular orbit from a documented density-sphere model; the viewer animates the spacecraft through the configured post-capture orbit count after intercept.
 
 See [docs/math.md](docs/math.md) for the derivation, frames, assumptions, validation strategy, and interpretation of Δv/C3 values.
 
@@ -144,13 +146,14 @@ See [docs/math.md](docs/math.md) for the derivation, frames, assumptions, valida
 ```bash
 python -m pip install -e ".[dev]"
 pytest
+JULIA_DEPOT_PATH=.local/julia_depot .local/julia/1.12.6/bin/julia --project=. -e 'using Pkg; Pkg.test()'
 ruff format --check app scripts/orbital.py scripts/ephem_earth.py \
   scripts/hud_metrics.py scripts/plan_intercepts.py scripts/sbdb_client.py tests run.py
 ruff check app scripts/orbital.py scripts/ephem_earth.py \
   scripts/hud_metrics.py scripts/plan_intercepts.py scripts/sbdb_client.py tests run.py
 ```
 
-Tests cover database idempotency, read-only SQL enforcement, Flask routes, planetary propagation, 3D mission loading, Kepler propagation, and Lambert endpoint closure.
+Tests cover database idempotency, read-only SQL enforcement, Flask routes, planetary propagation, 3D mission loading, Kepler propagation, Lambert endpoint closure, density-sphere capture estimates, and final-orbit propagation.
 
 ## Scope and limitations
 
@@ -160,7 +163,8 @@ Tests cover database idempotency, read-only SQL enforcement, Flask routes, plane
 - `EPHEMERIS_MODE=skyfield` provides an optional JPL DE Earth state.
 - Asteroid elements are osculating and are not numerically integrated with perturbations.
 - C3 and LEO departure Δv are preliminary patched-conic estimates.
-- No launch vehicle, finite-burn, capture, navigation, or uncertainty design is performed.
+- Asteroid capture and final-orbit results use estimated spherical mass properties when direct physical data is missing.
+- No launch vehicle, finite-burn, stationkeeping, navigation, or uncertainty design is performed.
 
 ## License
 

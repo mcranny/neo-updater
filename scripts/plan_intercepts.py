@@ -4,6 +4,10 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
+import shutil
+import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +25,86 @@ from scripts.orbital import (
 )
 
 DAY_S = 86400.0
+ROOT_DIR = Path(__file__).resolve().parents[1]
+LOCAL_JULIA = ROOT_DIR / ".local" / "julia" / "1.12.6" / "bin" / "julia"
+JULIA_PROJECT = ROOT_DIR
+JULIA_CLI = ROOT_DIR / "bin" / "plan_intercepts.jl"
+JULIA_DEPOT = ROOT_DIR / ".local" / "julia_depot"
+
+
+def _julia_executable() -> str:
+    configured = os.getenv("JULIA", "").strip()
+    if configured:
+        return configured
+    if LOCAL_JULIA.exists():
+        return str(LOCAL_JULIA)
+    found = shutil.which("julia")
+    if found:
+        return found
+    raise RuntimeError(
+        "Julia calculation backend is required. Install Julia or set JULIA to the binary path."
+    )
+
+
+def _uses_local_julia(executable: str) -> bool:
+    try:
+        return Path(executable).resolve() == LOCAL_JULIA.resolve()
+    except OSError:
+        return False
+
+
+def _run_julia_backend(
+    payload: dict[str, Any],
+    tof_days_grid: list[int],
+    arrive_offset_hours: list[int],
+    leo_alt_m: float,
+    final_orbits: float,
+) -> dict[str, Any]:
+    if not tof_days_grid:
+        raise ValueError("tof_days_grid must not be empty")
+    step = tof_days_grid[1] - tof_days_grid[0] if len(tof_days_grid) > 1 else 1
+    arrive_hours = ",".join(str(value) for value in arrive_offset_hours)
+    executable = _julia_executable()
+    env = os.environ.copy()
+    if _uses_local_julia(executable):
+        env.setdefault("JULIA_DEPOT_PATH", str(JULIA_DEPOT))
+    with tempfile.TemporaryDirectory() as tmpdir:
+        input_path = Path(tmpdir) / "payload.json"
+        output_path = Path(tmpdir) / "intercepts.json"
+        input_path.write_text(json.dumps(payload), encoding="utf-8")
+        command = [
+            executable,
+            f"--project={JULIA_PROJECT}",
+            str(JULIA_CLI),
+            "--input",
+            str(input_path),
+            "--output",
+            str(output_path),
+            "--tof-min",
+            str(min(tof_days_grid)),
+            "--tof-max",
+            str(max(tof_days_grid)),
+            "--tof-step",
+            str(step),
+            "--arrive-hours",
+            arrive_hours,
+            "--leo-alt-m",
+            str(leo_alt_m),
+            "--final-orbits",
+            str(final_orbits),
+        ]
+        completed = subprocess.run(
+            command,
+            check=False,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        if completed.returncode != 0:
+            message = (completed.stderr or completed.stdout or "Julia backend failed").strip()
+            raise RuntimeError(f"Julia calculation backend failed: {message[-2000:]}")
+        return json.loads(output_path.read_text(encoding="utf-8"))
 
 
 def _asteroid_M_at_time(el: dict[str, Any], t_jd: float) -> float | None:
@@ -148,28 +232,13 @@ def attach_intercepts(
     tof_days_grid: list[int] | None = None,
     arrive_offset_hours: list[int] | None = None,
     leo_alt_m: float = 500e3,
+    final_orbits: float = 10.0,
 ) -> dict[str, Any]:
     if tof_days_grid is None:
         tof_days_grid = list(range(30, 181, 10))
     if arrive_offset_hours is None:
         arrive_offset_hours = [-12, -6, 0, 6, 12]
-
-    for o in payload.get("objects", []):
-        o["intercept"] = plan_intercept_for_object(
-            o,
-            tof_days_grid=tof_days_grid,
-            arrive_offset_hours=arrive_offset_hours,
-            leo_alt_m=leo_alt_m,
-        )
-
-    payload["intercept_note"] = {
-        "frame": "heliocentric ecliptic (Sun μ)",
-        "earth_model": "configured analytic or Skyfield ephemeris",
-        "cost": "minimize |v1−vE| + |vast−v2|",
-        "dv_units": "km/s",
-        "time_scale": "TDB JD",
-    }
-    return payload
+    return _run_julia_backend(payload, tof_days_grid, arrive_offset_hours, leo_alt_m, final_orbits)
 
 
 def main():
@@ -181,13 +250,18 @@ def main():
     ap.add_argument("--tof-max", type=int, default=180)
     ap.add_argument("--tof-step", type=int, default=10)
     ap.add_argument("--arrive-hours", default="-12,-6,0,6,12")
+    ap.add_argument("--final-orbits", type=float, default=10.0)
     args = ap.parse_args()
 
     src = json.loads(Path(args.inp).read_text())
     tof = list(range(args.tof_min, args.tof_max + 1, args.tof_step))
     offs = [int(s) for s in args.arrive_hours.split(",") if s]
     out = attach_intercepts(
-        src, tof_days_grid=tof, arrive_offset_hours=offs, leo_alt_m=args.leo_alt_m
+        src,
+        tof_days_grid=tof,
+        arrive_offset_hours=offs,
+        leo_alt_m=args.leo_alt_m,
+        final_orbits=args.final_orbits,
     )
     Path(args.out).write_text(json.dumps(out, indent=2))
     print(f"Wrote {args.out}")

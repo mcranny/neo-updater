@@ -1,5 +1,5 @@
 PRAGMA foreign_keys = ON;
-PRAGMA user_version = 2;
+PRAGMA user_version = 3;
 
 CREATE TABLE IF NOT EXISTS ingestion_runs (
     run_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -69,6 +69,9 @@ CREATE TABLE IF NOT EXISTS intercept_plans (
     total_dv_kms REAL NOT NULL,
     c3_km2_s2 REAL,
     leo_departure_dv_kms REAL,
+    capture_dv_kms REAL,
+    stable_final_orbit INTEGER,
+    capture_json TEXT,
     polyline_json TEXT,
     computed_at TEXT NOT NULL,
     UNIQUE (approach_id, method)
@@ -80,6 +83,8 @@ CREATE INDEX IF NOT EXISTS idx_approaches_designation
     ON close_approaches(designation);
 CREATE INDEX IF NOT EXISTS idx_plans_total_dv
     ON intercept_plans(total_dv_kms);
+CREATE INDEX IF NOT EXISTS idx_plans_capture_dv
+    ON intercept_plans(capture_dv_kms);
 
 DROP VIEW IF EXISTS latest_asteroid_summary;
 CREATE VIEW latest_asteroid_summary AS
@@ -103,7 +108,9 @@ SELECT
     ip.arrival_dv_kms,
     ip.total_dv_kms,
     ip.c3_km2_s2,
-    ip.leo_departure_dv_kms
+    ip.leo_departure_dv_kms,
+    ip.capture_dv_kms,
+    ip.stable_final_orbit
 FROM asteroids a
 JOIN close_approaches ca ON ca.approach_id = (
     SELECT ca2.approach_id

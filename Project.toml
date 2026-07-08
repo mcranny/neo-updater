@@ -1,0 +1,17 @@
+name = "AsteroidPlannerBackend"
+uuid = "9e7a3fb7-5164-4f24-a86d-ff68a3122b62"
+version = "0.1.0"
+
+[deps]
+JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+
+[compat]
+JSON = "0.21"
+julia = "1.12"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]

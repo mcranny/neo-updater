@@ -57,6 +57,7 @@ def collect_payload(settings: Settings) -> dict[str, Any]:
         tof_days_grid=tof_grid,
         arrive_offset_hours=list(settings.arrival_offsets_hours),
         leo_alt_m=settings.leo_altitude_km * 1000.0,
+        final_orbits=settings.final_orbit_count,
     )
 
 

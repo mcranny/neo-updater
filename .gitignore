@@ -13,6 +13,7 @@ __pycache__/
 *.pyo
 
 # local artifacts / backups
+.local/
 app/viewer3d.backup.pydata/**/*.json
 *.bsp
 .venv/
