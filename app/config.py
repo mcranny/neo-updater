@@ -54,6 +54,7 @@ class Settings:
     tof_step_days: int
     arrival_offsets_hours: tuple[int, ...]
     leo_altitude_km: float
+    final_orbit_count: float
 
 
 def get_settings() -> Settings:
@@ -83,4 +84,5 @@ def get_settings() -> Settings:
         tof_step_days=_env_int("INTERCEPT_TOF_STEP_DAYS", 10),
         arrival_offsets_hours=offsets,
         leo_altitude_km=_env_float("LEO_ALTITUDE_KM", 500.0),
+        final_orbit_count=_env_float("FINAL_ORBIT_COUNT", 10.0),
     )

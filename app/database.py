@@ -43,6 +43,19 @@ def initialize_database(path: Path | None = None) -> Path:
         if schema_version < 2:
             connection.executescript(schema)
             connection.commit()
+        elif schema_version < 3:
+            existing = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(intercept_plans)").fetchall()
+            }
+            if "capture_dv_kms" not in existing:
+                connection.execute("ALTER TABLE intercept_plans ADD COLUMN capture_dv_kms REAL")
+            if "stable_final_orbit" not in existing:
+                connection.execute("ALTER TABLE intercept_plans ADD COLUMN stable_final_orbit INTEGER")
+            if "capture_json" not in existing:
+                connection.execute("ALTER TABLE intercept_plans ADD COLUMN capture_json TEXT")
+            connection.executescript(schema)
+            connection.commit()
     return database_path
 
 
@@ -215,13 +228,15 @@ def upsert_payload(payload: dict[str, Any], path: Path | None = None) -> dict[st
                 departure = plan.get("depart_jd_tdb", plan.get("departure_jd_tdb"))
                 arrival = plan.get("arrive_jd_tdb", plan.get("arrival_jd_tdb"))
                 total_dv = float(plan["dv_sum_mps"]) / 1000.0
+                capture = plan.get("capture") if isinstance(plan.get("capture"), dict) else None
                 connection.execute(
                     """
                     INSERT INTO intercept_plans(
                         approach_id, method, departure_jd_tdb, arrival_jd_tdb,
                         tof_days, departure_dv_kms, arrival_dv_kms, total_dv_kms,
-                        c3_km2_s2, leo_departure_dv_kms, polyline_json, computed_at
-                    ) VALUES (?, 'lambert-universal-v1', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        c3_km2_s2, leo_departure_dv_kms, capture_dv_kms,
+                        stable_final_orbit, capture_json, polyline_json, computed_at
+                    ) VALUES (?, 'lambert-universal-v1', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(approach_id, method) DO UPDATE SET
                         departure_jd_tdb=excluded.departure_jd_tdb,
                         arrival_jd_tdb=excluded.arrival_jd_tdb,
@@ -231,6 +246,9 @@ def upsert_payload(payload: dict[str, Any], path: Path | None = None) -> dict[st
                         total_dv_kms=excluded.total_dv_kms,
                         c3_km2_s2=excluded.c3_km2_s2,
                         leo_departure_dv_kms=excluded.leo_departure_dv_kms,
+                        capture_dv_kms=excluded.capture_dv_kms,
+                        stable_final_orbit=excluded.stable_final_orbit,
+                        capture_json=excluded.capture_json,
                         polyline_json=excluded.polyline_json,
                         computed_at=excluded.computed_at
                     """,
@@ -244,6 +262,9 @@ def upsert_payload(payload: dict[str, Any], path: Path | None = None) -> dict[st
                         total_dv,
                         plan.get("c3_km2_s2"),
                         plan.get("leo_dv_kms"),
+                        capture.get("capture_dv_kms") if capture else None,
+                        int(bool(capture.get("stable_final_orbit"))) if capture else None,
+                        json.dumps(capture) if capture else None,
                         json.dumps(
                             plan.get("lambert_polyline_xyz_au")
                             or plan.get("lambert_polyline_xy_au")

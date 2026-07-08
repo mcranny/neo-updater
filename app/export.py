@@ -22,7 +22,7 @@ def build_viewer_payload(path: Path | None = None) -> dict[str, Any]:
             oe.mean_anomaly_deg, oe.perihelion_time_jd_tdb,
             ip.departure_jd_tdb, ip.arrival_jd_tdb, ip.tof_days,
             ip.departure_dv_kms, ip.arrival_dv_kms, ip.total_dv_kms,
-            ip.c3_km2_s2, ip.leo_departure_dv_kms, ip.polyline_json
+            ip.c3_km2_s2, ip.leo_departure_dv_kms, ip.capture_json, ip.polyline_json
         FROM asteroids a
         JOIN close_approaches ca ON ca.designation = a.designation
         JOIN orbital_elements oe ON oe.designation = a.designation
@@ -61,6 +61,7 @@ def build_viewer_payload(path: Path | None = None) -> dict[str, Any]:
                     "dv_total_kms": row["total_dv_kms"],
                     "c3_km2_s2": row["c3_km2_s2"],
                     "leo_dv_kms": row["leo_departure_dv_kms"],
+                    "capture": json.loads(row["capture_json"] or "null"),
                     "lambert_polyline_xyz_au": json.loads(row["polyline_json"] or "[]"),
                 },
             }

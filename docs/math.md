@@ -106,13 +106,38 @@ $$\Delta v_{\text{LEO}} = \sqrt{v_\infty^2 + v_{\text{escape}}^2} - v_{\text{cir
 
 This patched-conic mapping is useful for first-order comparison only. A rigorous Earth-departure design must transform the heliocentric asymptote into the correct geocentric frame and include launch-site and finite-burn constraints.
 
-## 8. Automated checks
+## 8. Asteroid capture and final orbit
+
+The Julia backend adds an asteroid-local capture estimate after the heliocentric rendezvous calculation. Because JPL close-approach records often do not provide mass or shape, this model is explicitly approximate:
+
+- use the reported diameter when available;
+- otherwise estimate diameter from absolute magnitude with albedo 0.14;
+- assume a spherical body with bulk density 2000 kg/m^3;
+- compute asteroid mass, gravitational parameter, Hill radius, surface gravity, circular speed, and escape speed from those assumptions.
+
+The target final orbit starts as a circular orbit at three asteroid radii from the center. The orbit is flagged as implausible when it lies outside one third of the estimated Hill radius or when propagation intersects the surface or exceeds the same Hill-fraction bound. The arrival velocity mismatch is treated as asteroid-relative hyperbolic excess speed:
+
+$$v_\infty \approx \Delta v_{\text{arrive}}.$$
+
+At target orbit radius $r$,
+
+$$v_{\text{escape,ast}} = \sqrt{\frac{2\mu_{\text{ast}}}{r}}, \qquad
+v_{\text{circular,ast}} = \sqrt{\frac{\mu_{\text{ast}}}{r}},$$
+
+$$v_{\text{periapsis}} = \sqrt{v_\infty^2 + v_{\text{escape,ast}}^2}, \qquad
+\Delta v_{\text{capture}} = |v_{\text{periapsis}} - v_{\text{circular,ast}}|.$$
+
+The final circular orbit is propagated for the configured post-capture orbit count, ten orbits by default, capped at 30 days. It is exported both in asteroid-relative metres and heliocentric AU so the viewer can animate the spacecraft after intercept for the same duration the backend validated. This does not model irregular gravity fields, asteroid rotation, stationkeeping, navigation errors, or solar-radiation pressure.
+
+## 9. Automated checks
 
 The test suite verifies:
 
 - Kepler-equation residuals;
 - one-period closure of a circular Earth orbit;
 - Lambert propagation to a known Earth-to-Mars-like endpoint;
+- density-sphere asteroid mass and capture-burn calculations;
+- bounded final-orbit propagation and stability flags;
 - finite, physically plausible states and 3D orbit curves for all eight planets;
 - mission selection data and legacy-path compatibility;
 - rejection of nonpositive transfer time;
@@ -121,7 +146,7 @@ The test suite verifies:
 - read-only SQL enforcement; and
 - dashboard, detail, API, and health routes.
 
-## 9. Limitations
+## 10. Limitations
 
 The current model omits:
 
@@ -129,9 +154,9 @@ The current model omits:
 - covariance propagation and encounter uncertainty;
 - multi-revolution Lambert branches;
 - continuous launch-window optimization;
-- planetary sphere-of-influence transitions;
+- high-fidelity planetary sphere-of-influence transitions;
 - launch vehicle performance and finite burns;
-- terminal guidance, capture, and proximity operations.
+- terminal guidance, stationkeeping, surface operations, and proximity navigation.
 
 The results are appropriate for preliminary comparison, visualization, and software demonstration—not flight decisions.
 

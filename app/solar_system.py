@@ -106,10 +106,25 @@ class Mission:
     c3_km2_s2: float | None
     leo_dv_kms: float | None
     polyline_au: np.ndarray
+    capture: dict[str, Any]
+    final_orbit_polyline_au: np.ndarray | None
 
     @property
     def label(self) -> str:
         return f"{self.designation}  ·  {self.approach_text}  ·  Δv {self.total_dv_kms:.2f} km/s"
+
+    @property
+    def capture_duration_days(self) -> float:
+        if self.final_orbit_polyline_au is None:
+            return 0.0
+        try:
+            return max(0.0, float(self.capture.get("propagation_days") or 0.0))
+        except (TypeError, ValueError):
+            return 0.0
+
+    @property
+    def total_duration_days(self) -> float:
+        return self.tof_days + self.capture_duration_days
 
 
 def julian_centuries(jd_tdb: float) -> float:
@@ -218,6 +233,8 @@ def load_missions(path: Path) -> list[Mission]:
         polyline = intercept.get("lambert_polyline_xyz_au")
         if not polyline:
             polyline = intercept.get("lambert_polyline_xy_au")
+        capture = intercept.get("capture") if isinstance(intercept.get("capture"), dict) else {}
+        final_orbit_polyline = capture.get("orbit_polyline_heliocentric_au") if capture else None
         try:
             departure = float(departure_value)
             arrival = float(arrival_value)
@@ -246,6 +263,10 @@ def load_missions(path: Path) -> list[Mission]:
                     else None
                 ),
                 polyline_au=_polyline_xyz(polyline),
+                capture=capture,
+                final_orbit_polyline_au=(
+                    _polyline_xyz(final_orbit_polyline) if final_orbit_polyline else None
+                ),
             )
         except (KeyError, TypeError, ValueError):
             continue
