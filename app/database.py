@@ -51,7 +51,9 @@ def initialize_database(path: Path | None = None) -> Path:
             if "capture_dv_kms" not in existing:
                 connection.execute("ALTER TABLE intercept_plans ADD COLUMN capture_dv_kms REAL")
             if "stable_final_orbit" not in existing:
-                connection.execute("ALTER TABLE intercept_plans ADD COLUMN stable_final_orbit INTEGER")
+                connection.execute(
+                    "ALTER TABLE intercept_plans ADD COLUMN stable_final_orbit INTEGER"
+                )
             if "capture_json" not in existing:
                 connection.execute("ALTER TABLE intercept_plans ADD COLUMN capture_json TEXT")
             connection.executescript(schema)
