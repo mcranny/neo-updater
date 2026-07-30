@@ -1,28 +1,21 @@
 # env/editor
-.venv/
-*.egg-info/
-build/
-dist/
 .env
+.venv/
 .vscode/
 .DS_Store
 
-# python build noise
+# Python build/cache noise
+*.egg-info/
+build/
+dist/
 __pycache__/
-*.pyc
-*.pyo
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
 
 # local artifacts / backups
 .local/
 app/viewer3d.backup.pydata/**/*.json
 *.bsp
-.venv/
-__pycache__/
-.env
-.venv/
-__pycache__/
-*.py[cod]
-.pytest_cache/
-.ruff_cache/
 data/latest_intercepts.json
 data/sbdb_cache/
